@@ -293,7 +293,7 @@ class GoldMirror:
                 logger.warning("running_in_simulation_mode")
                 self._setup_simulation_mode()
             else:
-                self._setup_trading_mode()
+                await self._setup_trading_mode()
             
             # Initialize Telegram client
             self._setup_telegram()
@@ -345,12 +345,12 @@ class GoldMirror:
                 message="Running in simulation mode without MT5 connection"
             )
         
-    def _setup_trading_mode(self) -> None:
+    async def _setup_trading_mode(self) -> None:
         """Set up components for real trading mode."""
         logger.info("setting_up_trading_mode")
         
         # Get account balance for risk config
-        account_balance = self.mt5_connection.get_account_balance() if self.mt5_connection else 10000.0
+        account_balance = await self.mt5_connection.get_account_balance() if self.mt5_connection else 10000.0
         
         # Initialize real trading components
         self.trade_executor = TradeExecutor(
