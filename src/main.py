@@ -109,6 +109,19 @@ class MT5Config(BaseModel):
     max_retries: int = Field(default=3, gt=0)
     health_check_interval_seconds: int = Field(default=30, gt=0)
 
+    @classmethod
+    def from_environment(cls):
+        """Create MT5Config from environment variables."""
+        return cls(
+            server=os.getenv("MT5_SERVER", ""),
+            login=int(os.getenv("MT5_LOGIN", "0")),
+            password=os.getenv("MT5_PASSWORD", ""),
+            timeout_ms=int(os.getenv("MT5_TIMEOUT_MS", "60000")),
+            retry_delay_seconds=int(os.getenv("MT5_RETRY_DELAY_SECONDS", "5")),
+            max_retries=int(os.getenv("MT5_MAX_RETRIES", "3")),
+            health_check_interval_seconds=int(os.getenv("MT5_HEALTH_CHECK_INTERVAL_SECONDS", "30"))
+        )
+
 class RiskConfig(BaseModel):
     """Risk management configuration."""
     max_daily_loss_pct: float = Field(gt=0, le=1)
@@ -190,23 +203,23 @@ class GoldMirror:
         4. Begins signal processing
         """
         try:
-            # Initialize MT5 connection
-            mt5_config = MT5Config(
-                server=os.getenv("MT5_SERVER", ""),
-                login=int(os.getenv("MT5_LOGIN", "0")),
-                password=os.getenv("MT5_PASSWORD", ""),
-                timeout_ms=self.config.mt5.timeout_ms,
-                retry_delay_seconds=self.config.mt5.retry_delay_seconds,
-                max_retries=self.config.mt5.max_retries,
-                health_check_interval_seconds=self.config.mt5.health_check_interval_seconds
-            )
+            # Initialize MT5 connection using the same method as test script
+            try:
+                mt5_config = MT5Config.from_environment()
+                logger.info("loaded_mt5_config", server=mt5_config.server, login=mt5_config.login)
+            except ValueError as e:
+                logger.error("mt5_config_error", error=str(e))
+                raise RuntimeError(f"MT5 configuration error: {str(e)}")
             
             self.mt5_connection = MT5Connection(mt5_config)
             
-            # Add this line to establish the connection
+            # Connect to MT5
+            logger.info("connecting_to_mt5")
             if not await self.mt5_connection.connect():
                 logger.error("failed_to_connect_to_mt5")
                 raise RuntimeError("Failed to connect to MT5")
+            
+            logger.info("connected_to_mt5")
             
             if self.mt5_connection.is_simulation_mode:
                 logger.warning("running_in_simulation_mode")
