@@ -8,31 +8,30 @@ from datetime import datetime, timedelta
 
 from src.mt5.connection import MT5Connection, MT5Config
 
-@pytest.fixture
-def mock_mt5():
-    """Mock MT5 module for testing."""
-    with patch("src.mt5.connection.mt5") as mock:
+@pytest.fixture(autouse=True)
+def patch_mt5():
+    with patch("src.mt5.mt5_utils.get_mt5") as mock_get_mt5, \
+         patch("src.mt5.mt5_utils.is_mt5_available", return_value=True):
+        mock_mt5 = MagicMock()
+        mock_get_mt5.return_value = mock_mt5
         # Mock terminal info
-        mock.terminal_info.return_value = MagicMock(
+        mock_mt5.terminal_info.return_value = MagicMock(
             connected=True,
             trade_allowed=True
         )
-        
         # Mock account info
-        mock.account_info.return_value = MagicMock(
+        mock_mt5.account_info.return_value = MagicMock(
             balance=10000.0,
             equity=10050.0
         )
-        
         # Mock symbols
-        mock.symbols_get.return_value = [
+        mock_mt5.symbols_get.return_value = [
             MagicMock(name="EURUSD"),
             MagicMock(name="GBPUSD"),
             MagicMock(name="XAUUSD")
         ]
-        mock.symbols_total.return_value = 3
-        
-        yield mock
+        mock_mt5.symbols_total.return_value = 3
+        yield
 
 @pytest.fixture
 def mt5_config():
@@ -53,107 +52,80 @@ def connection(mt5_config):
     return MT5Connection(config=mt5_config)
 
 @pytest.mark.asyncio
-async def test_connection_success(connection, mock_mt5):
+async def test_connection_success(connection):
     """Test successful connection to MT5."""
-    mock_mt5.initialize.return_value = True
-    mock_mt5.login.return_value = True
-    
+    connection.mt5.initialize.return_value = True
+    connection.mt5.login.return_value = True
     success = await connection.connect()
-    
     assert success
     assert connection.is_connected
-    assert mock_mt5.initialize.called
-    assert mock_mt5.login.called
+    assert connection.mt5.initialize.called
+    assert connection.mt5.login.called
     assert len(connection.available_symbols) == 3
 
 @pytest.mark.asyncio
-async def test_connection_failure(connection, mock_mt5):
+async def test_connection_failure(connection):
     """Test failed connection to MT5."""
-    mock_mt5.initialize.return_value = False
-    mock_mt5.last_error.return_value = (1, "Test error")
-    
+    connection.mt5.initialize.return_value = False
+    connection.mt5.last_error.return_value = (1, "Test error")
     success = await connection.connect()
-    
     assert not success
     assert not connection.is_connected
-    assert mock_mt5.initialize.called
-    assert not mock_mt5.login.called
+    assert connection.mt5.initialize.called
+    assert not connection.mt5.login.called
 
 @pytest.mark.asyncio
-async def test_connection_login_failure(connection, mock_mt5):
+async def test_connection_login_failure(connection):
     """Test failed login to MT5."""
-    mock_mt5.initialize.return_value = True
-    mock_mt5.login.return_value = False
-    mock_mt5.last_error.return_value = (2, "Invalid credentials")
-    
+    connection.mt5.initialize.return_value = True
+    connection.mt5.login.return_value = False
+    connection.mt5.last_error.return_value = (2, "Invalid credentials")
     success = await connection.connect()
-    
     assert not success
     assert not connection.is_connected
-    assert mock_mt5.initialize.called
-    assert mock_mt5.login.called
+    assert connection.mt5.initialize.called
+    assert connection.mt5.login.called
 
 @pytest.mark.asyncio
-async def test_disconnect(connection, mock_mt5):
+async def test_disconnect(connection):
     """Test disconnecting from MT5."""
-    # Connect first
-    mock_mt5.initialize.return_value = True
-    mock_mt5.login.return_value = True
+    connection.mt5.initialize.return_value = True
+    connection.mt5.login.return_value = True
     await connection.connect()
-    
-    # Disconnect
     await connection.disconnect()
-    
     assert not connection.is_connected
-    assert mock_mt5.shutdown.called
+    assert connection.mt5.shutdown.called
 
 @pytest.mark.asyncio
-async def test_health_check_loop(connection, mock_mt5):
+async def test_health_check_loop(connection):
     """Test health check monitoring."""
-    # Connect first
-    mock_mt5.initialize.return_value = True
-    mock_mt5.login.return_value = True
+    connection.mt5.initialize.return_value = True
+    connection.mt5.login.return_value = True
     await connection.connect()
-    
-    # Simulate connection loss
-    mock_mt5.terminal_info.return_value = None
-    
-    # Wait for health check
+    connection.mt5.terminal_info.return_value = None
     await asyncio.sleep(1.5)
-    
-    # Should have attempted reconnection
     assert connection._connection_attempts > 0
-    assert mock_mt5.initialize.call_count > 1
+    assert connection.mt5.initialize.call_count > 1
 
 @pytest.mark.asyncio
-async def test_max_retries(connection, mock_mt5):
+async def test_max_retries(connection):
     """Test maximum reconnection attempts."""
-    # Connect first
-    mock_mt5.initialize.return_value = True
-    mock_mt5.login.return_value = True
+    connection.mt5.initialize.return_value = True
+    connection.mt5.login.return_value = True
     await connection.connect()
-    
-    # Simulate persistent connection loss
-    mock_mt5.terminal_info.return_value = None
-    mock_mt5.initialize.return_value = False
-    
-    # Wait for multiple retry attempts
+    connection.mt5.terminal_info.return_value = None
+    connection.mt5.initialize.return_value = False
     await asyncio.sleep(3)
-    
-    # Should have reached max retries
     assert connection._connection_attempts >= connection.config.max_retries
     assert not connection.is_connected
 
 @pytest.mark.asyncio
-async def test_connection_info(connection, mock_mt5):
+async def test_connection_info(connection):
     """Test getting connection information."""
-    # Connect first
-    mock_mt5.initialize.return_value = True
-    mock_mt5.login.return_value = True
+    connection.mt5.initialize.return_value = True
+    connection.mt5.login.return_value = True
     await connection.connect()
-    
     info = connection.get_connection_info()
-    
     assert info["connected"]
     assert info["server"] == connection.config.server
     assert info["login"] == connection.config.login
@@ -163,10 +135,10 @@ async def test_connection_info(connection, mock_mt5):
     assert info["terminal"]["equity"] == 10050.0
 
 @pytest.mark.asyncio
-async def test_connection_info_disconnected(connection):
+async def test_connection_info_disconnected(mt5_config):
     """Test getting connection information when disconnected."""
+    connection = MT5Connection(config=mt5_config)
     info = connection.get_connection_info()
-    
     assert not info["connected"]
     assert info["last_health_check"] is None
     assert info["connection_attempts"] == 0
@@ -179,10 +151,9 @@ async def test_environment_config():
         "MT5_LOGIN": "54321",
         "MT5_PASSWORD": "env_password"
     }
-    
     with patch.dict(os.environ, test_env):
-        connection = MT5Connection()
-        
+        config = MT5Config.from_environment()
+        connection = MT5Connection(config=config)
         assert connection.config.server == "env_server"
         assert connection.config.login == 54321
         assert connection.config.password == "env_password"
@@ -191,6 +162,5 @@ def test_missing_environment_vars():
     """Test handling of missing environment variables."""
     with patch.dict(os.environ, {}, clear=True):
         with pytest.raises(ValueError) as exc_info:
-            MT5Connection()
-            
+            MT5Config.from_environment()
         assert "Missing required environment variables" in str(exc_info.value) 

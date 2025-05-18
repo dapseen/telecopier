@@ -16,7 +16,7 @@ setup(
         "rich>=13.7.0",
     ],
     python_requires=">=3.9",
-    author="GoldMirror Team",
+    author="We3rdbot",
     description="Telegram to MT5 Signal Automation",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",

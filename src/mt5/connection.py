@@ -25,14 +25,71 @@ logger = structlog.get_logger(__name__)
 
 class MT5Config(BaseModel):
     """Configuration for MT5 connection."""
-    server: str
-    login: int
-    password: str
-    timezone: str = "UTC"
-    timeout_ms: int = Field(default=60000, gt=0)
-    retry_delay_seconds: int = Field(default=5, gt=0)
-    max_retries: int = Field(default=3, gt=0)
-    health_check_interval_seconds: int = Field(default=30, gt=0)
+    server: str = Field(..., description="MT5 server address")
+    login: int = Field(..., description="MT5 account login number")
+    password: str = Field(..., description="MT5 account password")
+    timezone: str = Field(default="UTC", description="Timezone for MT5 operations")
+    timeout_ms: int = Field(default=60000, gt=0, description="Connection timeout in milliseconds")
+    retry_delay_seconds: int = Field(default=5, gt=0, description="Delay between reconnection attempts")
+    max_retries: int = Field(default=3, gt=0, description="Maximum number of reconnection attempts")
+    health_check_interval_seconds: int = Field(default=30, gt=0, description="Interval between health checks")
+
+    @classmethod
+    def from_environment(cls) -> "MT5Config":
+        """Create MT5Config from environment variables.
+        
+        Required environment variables:
+        - MT5_SERVER: MT5 server address
+        - MT5_LOGIN: MT5 account login number
+        - MT5_PASSWORD: MT5 account password
+        
+        Optional environment variables:
+        - MT5_TIMEOUT_MS: Connection timeout in milliseconds (default: 60000)
+        - MT5_RETRY_DELAY: Delay between reconnection attempts in seconds (default: 5)
+        - MT5_MAX_RETRIES: Maximum number of reconnection attempts (default: 3)
+        - MT5_HEALTH_CHECK_INTERVAL: Interval between health checks in seconds (default: 30)
+        - MT5_TIMEZONE: Timezone for MT5 operations (default: UTC)
+        
+        Returns:
+            MT5Config instance with values from environment variables
+            
+        Raises:
+            ValueError: If required environment variables are missing
+        """
+        required_vars = {
+            "MT5_SERVER": "server",
+            "MT5_LOGIN": "login",
+            "MT5_PASSWORD": "password"
+        }
+        
+        # Check for required variables
+        missing_vars = [var for var in required_vars if var not in os.environ]
+        if missing_vars:
+            raise ValueError(
+                f"Missing required environment variables: {', '.join(missing_vars)}"
+            )
+            
+        # Get required values
+        config_data = {
+            "server": os.environ["MT5_SERVER"],
+            "login": int(os.environ["MT5_LOGIN"]),
+            "password": os.environ["MT5_PASSWORD"]
+        }
+        
+        # Get optional values with defaults
+        optional_vars = {
+            "MT5_TIMEOUT_MS": ("timeout_ms", int),
+            "MT5_RETRY_DELAY": ("retry_delay_seconds", int),
+            "MT5_MAX_RETRIES": ("max_retries", int),
+            "MT5_HEALTH_CHECK_INTERVAL": ("health_check_interval_seconds", int),
+            "MT5_TIMEZONE": ("timezone", str)
+        }
+        
+        for env_var, (field, type_) in optional_vars.items():
+            if env_var in os.environ:
+                config_data[field] = type_(os.environ[env_var])
+                
+        return cls(**config_data)
 
 class MT5Connection:
     """Manages connection to MetaTrader 5 terminal.

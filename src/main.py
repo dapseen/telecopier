@@ -16,8 +16,8 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
 
-from telegram_client import SignalMonitor
 from telegram import (
+    SignalMonitor,
     SignalParser,
     SignalValidator,
     SignalQueue,
@@ -146,16 +146,16 @@ class GoldMirror:
     - Risk management
     - Logging and analytics
     """
-    
+
     def __init__(self, config_path: Optional[str] = None):
         """Initialize GoldMirror application.
-        
+
         Args:
             config_path: Optional path to config file. If not provided, will use default.
         """
         self.config = self._load_config(config_path)
         self._setup_logging()
-        
+
         # Initialize components
         self.telegram_client: Optional[SignalMonitor] = None
         self.signal_parser = SignalParser()

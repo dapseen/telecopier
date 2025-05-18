@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from .connection import MT5Connection
 from .risk import RiskConfig
-from telegram.signal_parser import TradingSignal
+from src.telegram.signal_parser import TradingSignal
 
 logger = structlog.get_logger(__name__)
 
