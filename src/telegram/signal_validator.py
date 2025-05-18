@@ -60,7 +60,11 @@ class SignalValidator:
         """Clear the signal cache and reset available symbols."""
         self.signal_cache.clear()
         self._available_symbols.clear()
-        logger.info("signal_validator_cache_cleared")
+        logger.info(
+            "signal_validator_cache_cleared",
+            cache_size=len(self.signal_cache),
+            available_symbols_count=len(self._available_symbols)
+        )
         
     def validate_signal(self, signal: TradingSignal) -> ValidationResult:
         """Validate a trading signal.

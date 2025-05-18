@@ -577,7 +577,7 @@ class GoldMirror:
             
         # Clear signal queue
         if self.signal_queue:
-            self.signal_queue.clear()
+            await self.signal_queue.clear()
             logger.info("signal_queue_cleared")
             
         # Clear MT5 connection cache
