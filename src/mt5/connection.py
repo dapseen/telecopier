@@ -354,13 +354,9 @@ class MT5Connection:
         """
         symbol = symbol.upper()
         
-        # In simulation mode, always check against common symbols
+        # In simulation mode, check against available_symbols set
         if self._simulation_mode:
-            common_symbols = {
-                'XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD',
-                'USDCAD', 'NZDUSD', 'USDCHF', 'EURGBP', 'EURJPY'
-            }
-            return symbol in common_symbols
+            return symbol in self._available_symbols
             
         # For real trading, check connection and available symbols
         if not self._connected:

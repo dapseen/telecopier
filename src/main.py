@@ -246,14 +246,18 @@ class GoldMirror:
             mt5_connection=self.mt5_connection
         )
         
-        # Update available symbols for simulation
-        simulation_symbols = {
-            'XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD',
-            'USDCAD', 'NZDUSD', 'USDCHF', 'EURGBP', 'EURJPY'
-        }
+        # Get all symbols from trading sessions in config
+        simulation_symbols = set()
+        for session in self.config.trading_sessions:
+            simulation_symbols.update(session.symbols)
         
         if self.mt5_connection:
             self.mt5_connection.update_available_symbols(simulation_symbols)
+            logger.info(
+                "simulation_symbols_updated",
+                symbols=list(simulation_symbols),
+                session_count=len(self.config.trading_sessions)
+            )
         else:
             logger.warning(
                 "mt5_connection_not_available",
