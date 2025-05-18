@@ -222,6 +222,15 @@ class PositionManager:
         Returns:
             Optional[float]: Position size in lots, None if calculation fails
         """
+        logger.info(
+            "starting_position_calculation",
+            symbol=symbol,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            risk_amount=risk_amount,
+            is_connected=self.connection.is_connected
+        )
+        
         if not self.connection.is_connected:
             logger.error("mt5_not_connected")
             return None
@@ -229,6 +238,13 @@ class PositionManager:
         try:
             # Get symbol info
             symbol_info = mt5.symbol_info(symbol)
+            logger.info(
+                "symbol_info_retrieved",
+                symbol=symbol,
+                symbol_info_exists=bool(symbol_info),
+                symbol_info_dict=symbol_info._asdict() if symbol_info else None
+            )
+            
             if not symbol_info:
                 logger.error(
                     "symbol_not_found",
