@@ -107,10 +107,10 @@ mt5:
   health_check_interval_seconds: 30
 
 risk:
-  max_daily_loss_pct: 0.02
+  max_daily_loss_pct: 0.06
   max_position_size_pct: 0.02
-  max_open_positions: 3
+  max_open_positions: 1
   max_risk_per_trade_pct: 0.02
-  min_account_balance: 10000
+  min_account_balance: 100
 
 

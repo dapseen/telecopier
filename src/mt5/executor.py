@@ -76,7 +76,7 @@ class TradeExecutor:
         try:
             async with self._lock:
                 # Validate signal
-                validation_result = await self._validate_signal(signal)
+                validation_result = self._validate_signal(signal)
                 if not validation_result:
                     return TradeResult(
                         success=False,
@@ -113,7 +113,7 @@ class TradeExecutor:
                 simulation=self.simulation_mode
             )
             
-    async def _validate_signal(self, signal: "TradingSignal") -> bool:
+    def _validate_signal(self, signal: "TradingSignal") -> bool:
         """Validate signal against current market conditions.
         
         Args:
@@ -125,7 +125,8 @@ class TradeExecutor:
         try:
             # Check if symbol is available
             if not self.simulation_mode:
-                symbol_available = await self.connection.is_symbol_available(signal.symbol)
+                # Use synchronous check for symbol availability
+                symbol_available = self.connection.is_symbol_available(signal.symbol)
                 if not symbol_available:
                     logger.warning(
                         "symbol_not_available",
