@@ -11,7 +11,7 @@ import os
 import platform
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Any
 import asyncio
 import time
 
@@ -465,4 +465,103 @@ class MT5Connection:
                 symbols = self.mt5.symbols_get()
                 if symbols:
                     self._available_symbols = {s.name for s in symbols}
-            logger.info("mt5_connection_cache_cleared") 
+            logger.info("mt5_connection_cache_cleared")
+
+    async def place_order(
+        self,
+        symbol: str,
+        order_type: str,
+        direction: str,
+        volume: float,
+        price: Optional[float] = None,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+        comment: str = "",
+        magic: int = 0,
+        deviation: int = 10
+    ) -> Dict[str, Any]:
+        """Place a trading order.
+        
+        Args:
+            symbol: Trading symbol
+            order_type: Type of order (MARKET, LIMIT, STOP)
+            direction: Order direction (BUY, SELL)
+            volume: Position size in lots
+            price: Order price (required for pending orders)
+            stop_loss: Stop loss price
+            take_profit: Take profit price
+            comment: Order comment
+            magic: Magic number for order identification
+            deviation: Maximum price deviation in points
+            
+        Returns:
+            Dict containing:
+                success: bool indicating if order was placed
+                order_id: int order ticket if successful
+                error: str error message if failed
+        """
+        if not self.is_connected:
+            return {
+                "success": False,
+                "error": "MT5 not connected"
+            }
+            
+        try:
+            # Get current symbol info
+            symbol_info = self.mt5.symbol_info(symbol)
+            if not symbol_info:
+                return {
+                    "success": False,
+                    "error": f"Symbol {symbol} not found"
+                }
+                
+            # Prepare order request
+            request = {
+                "action": self.mt5.TRADE_ACTION_DEAL if order_type == "MARKET" else self.mt5.TRADE_ACTION_PENDING,
+                "symbol": symbol,
+                "volume": volume,
+                "type": self.mt5.ORDER_TYPE_BUY if direction == "BUY" else self.mt5.ORDER_TYPE_SELL,
+                "price": price if price else self.mt5.symbol_info_tick(symbol).ask,
+                "sl": stop_loss,
+                "tp": take_profit,
+                "deviation": deviation,
+                "magic": magic,
+                "comment": comment,
+                "type_time": self.mt5.ORDER_TIME_GTC,
+                "type_filling": self.mt5.ORDER_FILLING_FOK,
+            }
+            
+            # Send order
+            result = self.mt5.order_send(request)
+            if result.retcode != self.mt5.TRADE_RETCODE_DONE:
+                return {
+                    "success": False,
+                    "error": f"Order placement failed: {result.comment} (code: {result.retcode})"
+                }
+                
+            logger.info(
+                "order_placed",
+                symbol=symbol,
+                direction=direction,
+                volume=volume,
+                order_id=result.order,
+                price=result.price
+            )
+            
+            return {
+                "success": True,
+                "order_id": result.order,
+                "price": result.price
+            }
+            
+        except Exception as e:
+            logger.error(
+                "order_placement_error",
+                error=str(e),
+                symbol=symbol,
+                direction=direction
+            )
+            return {
+                "success": False,
+                "error": str(e)
+            } 
