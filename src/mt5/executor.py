@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from src.telegram.signal_parser import TradingSignal
 
 from .connection import MT5Connection
-from .risk import RiskConfig
+from .position_manager import RiskConfig
 
 logger = structlog.get_logger(__name__)
 
