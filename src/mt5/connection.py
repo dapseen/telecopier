@@ -96,7 +96,7 @@ class MT5Connection:
     
     This class handles the connection to MT5, including:
     - Secure login with credentials
-    - Connection monitoring
+    - Connection monitorls -aing
     - Automatic reconnection
     - Session management
     """

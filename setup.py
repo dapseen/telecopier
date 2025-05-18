@@ -1,5 +1,9 @@
 from setuptools import setup, find_packages
 
+# Read README with explicit UTF-8 encoding
+with open("README.md", encoding="utf-8") as f:
+    long_description = f.read()
+
 setup(
     name="goldmirror",
     version="1.0.0",
@@ -18,6 +22,6 @@ setup(
     python_requires=">=3.9",
     author="We3rdbot",
     description="Telegram to MT5 Signal Automation",
-    long_description=open("README.md").read(),
+    long_description=long_description,
     long_description_content_type="text/markdown",
 ) 
