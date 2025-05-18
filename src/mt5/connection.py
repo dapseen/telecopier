@@ -426,6 +426,36 @@ class MT5Connection:
         """
         return self._simulation_mode 
 
+    async def get_account_balance(self) -> Optional[float]:
+        """Get current account balance.
+        
+        Returns:
+            Optional[float]: Account balance if available, None otherwise
+        """
+        if not self._connected:
+            logger.warning("getting_balance_not_connected")
+            return None
+            
+        try:
+            account_info = self.mt5.account_info()
+            if not account_info:
+                logger.error("account_info_not_found")
+                return None
+                
+            logger.debug(
+                "account_balance_retrieved",
+                balance=account_info.balance,
+                equity=account_info.equity
+            )
+            return account_info.balance
+            
+        except Exception as e:
+            logger.error(
+                "get_account_balance_error",
+                error=str(e)
+            )
+            return None
+
     async def clear_cache(self) -> None:
         """Clear cached data and refresh from MT5."""
         async with self._lock:
