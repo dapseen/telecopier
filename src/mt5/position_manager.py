@@ -59,8 +59,8 @@ class RiskConfig(BaseModel):
     max_open_trades: int = Field(gt=0)
     max_daily_loss: float = Field(gt=0, le=100)  # Percentage
     max_symbol_risk: float = Field(gt=0, le=100)  # Maximum risk per symbol (%)
-    position_sizing: str = Field(regex="^(risk_based|fixed)$")
-    fixed_position_size: Optional[float] = None  # For fixed position sizing
+    position_sizing: str = Field(pattern="^(risk_based|fixed)$")
+    fixed_position_size: Optional[float] = None
 
     @validator("fixed_position_size")
     def validate_fixed_size(cls, v, values):
