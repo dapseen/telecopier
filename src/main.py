@@ -24,7 +24,7 @@ from telegram import (
     SignalPriority,
     TradingSignal
 )
-from mt5 import MT5Connection, TradeExecutor, RiskConfig
+from mt5 import MT5Connection, TradeExecutor, RiskConfig, MT5Config
 
 # Configure structured logging
 structlog.configure(
@@ -99,28 +99,6 @@ class AnalyticsConfig(BaseModel):
     enabled: bool
     metrics: List[str]
     dashboard: Dict[str, Any]
-
-class MT5Config(BaseModel):
-    """MT5 configuration."""
-    server: str
-    timezone: str = "UTC"
-    timeout_ms: int = Field(default=60000, gt=0)
-    retry_delay_seconds: int = Field(default=5, gt=0)
-    max_retries: int = Field(default=3, gt=0)
-    health_check_interval_seconds: int = Field(default=30, gt=0)
-
-    @classmethod
-    def from_environment(cls):
-        """Create MT5Config from environment variables."""
-        return cls(
-            server=os.getenv("MT5_SERVER", ""),
-            login=int(os.getenv("MT5_LOGIN", "0")),
-            password=os.getenv("MT5_PASSWORD", ""),
-            timeout_ms=int(os.getenv("MT5_TIMEOUT_MS", "60000")),
-            retry_delay_seconds=int(os.getenv("MT5_RETRY_DELAY_SECONDS", "5")),
-            max_retries=int(os.getenv("MT5_MAX_RETRIES", "3")),
-            health_check_interval_seconds=int(os.getenv("MT5_HEALTH_CHECK_INTERVAL_SECONDS", "30"))
-        )
 
 class RiskConfig(BaseModel):
     """Risk management configuration."""
@@ -203,10 +181,15 @@ class GoldMirror:
         4. Begins signal processing
         """
         try:
-            # Initialize MT5 connection using the same method as test script
+            # Initialize MT5 connection using the imported MT5Config
             try:
                 mt5_config = MT5Config.from_environment()
-                logger.info("loaded_mt5_config", server=mt5_config.server, login=mt5_config.login)
+                logger.info(
+                    "loaded_mt5_config",
+                    server=mt5_config.server,
+                    login=mt5_config.login,
+                    timeout_ms=mt5_config.timeout_ms
+                )
             except ValueError as e:
                 logger.error("mt5_config_error", error=str(e))
                 raise RuntimeError(f"MT5 configuration error: {str(e)}")
