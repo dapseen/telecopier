@@ -10,7 +10,7 @@ This package provides:
 from .mt5_utils import is_mt5_available, is_platform_supported, get_mt5
 from .connection import MT5Connection, MT5Config
 from .executor import TradeExecutor, TradeResult
-from ..main import RiskConfig
+from .position_manager import RiskConfig
 
 __all__ = [
     "MT5Connection",

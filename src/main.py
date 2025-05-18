@@ -24,7 +24,8 @@ from telegram import (
     SignalPriority,
     TradingSignal
 )
-from mt5 import MT5Connection, TradeExecutor, RiskConfig, MT5Config
+from mt5 import MT5Connection, TradeExecutor, MT5Config
+from mt5.position_manager import RiskConfig as PositionRiskConfig  # Renamed to avoid confusion
 
 # Configure structured logging
 structlog.configure(
@@ -101,12 +102,30 @@ class AnalyticsConfig(BaseModel):
     dashboard: Dict[str, Any]
 
 class RiskConfig(BaseModel):
-    """Risk management configuration."""
+    """Risk management configuration from config.yaml."""
     max_daily_loss_pct: float = Field(gt=0, le=1)
     max_position_size_pct: float = Field(gt=0, le=1)
     max_open_positions: int = Field(gt=0)
     max_risk_per_trade_pct: float = Field(gt=0, le=1)
     min_account_balance: float = Field(gt=0)
+
+    def to_position_risk_config(self, account_balance: float) -> PositionRiskConfig:
+        """Convert to PositionManager RiskConfig.
+        
+        Args:
+            account_balance: Current account balance
+            
+        Returns:
+            PositionRiskConfig: Risk configuration for position management
+        """
+        return PositionRiskConfig(
+            account_balance=account_balance,
+            risk_per_trade=self.max_risk_per_trade_pct * 100,  # Convert to percentage
+            max_open_trades=self.max_open_positions,
+            max_daily_loss=self.max_daily_loss_pct * 100,  # Convert to percentage
+            max_symbol_risk=self.max_position_size_pct * 100,  # Convert to percentage
+            position_sizing="risk_based"  # Default to risk-based position sizing
+        )
 
 class TradingConfig(BaseModel):
     """Trading parameters configuration."""
@@ -290,16 +309,13 @@ class GoldMirror:
         """Set up components for simulation mode."""
         logger.info("setting_up_simulation_mode")
         
+        # Use default account balance for simulation
+        account_balance = 10000.0
+        
         # Initialize simulation components
         self.trade_executor = TradeExecutor(
             connection=self.mt5_connection,
-            risk_config=RiskConfig(
-                max_daily_loss_pct=self.config.risk.max_daily_loss_pct,
-                max_position_size_pct=self.config.risk.max_position_size_pct,
-                max_open_positions=self.config.risk.max_open_positions,
-                max_risk_per_trade_pct=self.config.risk.max_risk_per_trade_pct,
-                min_account_balance=self.config.risk.min_account_balance
-            ),
+            risk_config=self.config.risk.to_position_risk_config(account_balance),
             simulation_mode=True
         )
         
@@ -333,16 +349,13 @@ class GoldMirror:
         """Set up components for real trading mode."""
         logger.info("setting_up_trading_mode")
         
+        # Get account balance for risk config
+        account_balance = self.mt5_connection.get_account_balance() if self.mt5_connection else 10000.0
+        
         # Initialize real trading components
         self.trade_executor = TradeExecutor(
             connection=self.mt5_connection,
-            risk_config=RiskConfig(
-                max_daily_loss_pct=self.config.risk.max_daily_loss_pct,
-                max_position_size_pct=self.config.risk.max_position_size_pct,
-                max_open_positions=self.config.risk.max_open_positions,
-                max_risk_per_trade_pct=self.config.risk.max_risk_per_trade_pct,
-                min_account_balance=self.config.risk.min_account_balance
-            )
+            risk_config=self.config.risk.to_position_risk_config(account_balance)
         )
         
         # Initialize signal validator with real trading symbols
