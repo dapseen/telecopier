@@ -93,9 +93,6 @@ MQL4/
 tester/
 tester_files/
 *.log
-# Ignore all .txt files except requirements.txt
-*.txt
-!requirements.txt
 *.dat
 *.hst
 *.fxt
