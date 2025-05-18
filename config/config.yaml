@@ -100,8 +100,11 @@ analytics:
     update_interval: 60  # Seconds 
 
 mt5:
-  server: "127.0.0.1"
   timezone: "UTC"
+  timeout_ms: 60000
+  retry_delay_seconds: 5
+  max_retries: 3
+  health_check_interval_seconds: 30
 
 risk:
   max_daily_loss_pct: 0.02

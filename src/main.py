@@ -116,6 +116,31 @@ class TradingConfig(BaseModel):
     cooldown_after_loss: int = Field(gt=0)
     max_slippage: int = Field(gt=0)
 
+class MT5Config(BaseModel):
+    """MT5 configuration.
+    
+    Note: server, login, and password are loaded from environment variables:
+    - MT5_SERVER: Your broker's MT5 server address
+    - MT5_LOGIN: Your MT5 account number
+    - MT5_PASSWORD: Your MT5 account password
+    """
+    server: Optional[str] = None  # Loaded from MT5_SERVER env var
+    timezone: str = "UTC"
+    timeout_ms: int = Field(default=60000, gt=0)
+    retry_delay_seconds: int = Field(default=5, gt=0)
+    max_retries: int = Field(default=3, gt=0)
+    health_check_interval_seconds: int = Field(default=30, gt=0)
+    login: Optional[int] = None  # Loaded from MT5_LOGIN env var
+    password: Optional[str] = None  # Loaded from MT5_PASSWORD env var
+
+    def __init__(self, **data):
+        """Initialize with environment variables for sensitive data."""
+        super().__init__(**data)
+        # Always load sensitive data from environment
+        self.server = os.getenv("MT5_SERVER")
+        self.login = int(os.getenv("MT5_LOGIN", "0"))
+        self.password = os.getenv("MT5_PASSWORD", "")
+
 class AppConfig(BaseModel):
     """Main application configuration."""
     trading: TradingConfig
@@ -127,6 +152,13 @@ class AppConfig(BaseModel):
     analytics: AnalyticsConfig
     mt5: MT5Config
     risk: RiskConfig
+
+    def __init__(self, **data):
+        """Initialize config with environment variables for MT5 credentials."""
+        super().__init__(**data)
+        # Override MT5 credentials from environment variables
+        self.mt5.login = int(os.getenv("MT5_LOGIN", "0"))
+        self.mt5.password = os.getenv("MT5_PASSWORD", "")
 
 class GoldMirror:
     """Main application class for GoldMirror trading automation.
