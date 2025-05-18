@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test script for the Telegram client.
+
 Run this script to test the connection and message reception.
 """
 
