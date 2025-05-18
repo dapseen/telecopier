@@ -261,4 +261,15 @@ class SignalQueue:
                     remaining=self._get_total_queue_size()
                 )
                 
-            return cleared_count 
+            return cleared_count
+
+    async def clear(self) -> None:
+        """Clear all signals from the queue and reset statistics."""
+        async with self._lock:
+            for queue in self.queues.values():
+                queue.clear()
+            self.total_signals_queued = 0
+            self.total_signals_processed = 0
+            self.total_signals_expired = 0
+            self.total_signals_failed = 0
+            logger.info("signal_queue_cleared") 

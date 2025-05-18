@@ -54,6 +54,13 @@ class SignalValidator:
         self.duplicate_window = timedelta(minutes=duplicate_window_minutes)
         self.signal_cache: deque[Tuple[datetime, TradingSignal]] = deque(maxlen=cache_size)
         self.mt5_connection = mt5_connection
+        self._available_symbols: Set[str] = set()
+        
+    def clear_cache(self) -> None:
+        """Clear the signal cache and reset available symbols."""
+        self.signal_cache.clear()
+        self._available_symbols.clear()
+        logger.info("signal_validator_cache_cleared")
         
     def validate_signal(self, signal: TradingSignal) -> ValidationResult:
         """Validate a trading signal.

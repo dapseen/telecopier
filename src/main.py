@@ -560,6 +560,33 @@ class GoldMirror:
 
         logger.info("logging_configured", level=log_config.level)
 
+    async def clear_cache(self) -> None:
+        """Clear all system caches.
+        
+        This method clears:
+        - Signal validator cache (duplicate detection)
+        - Signal queue cache
+        - MT5 connection cache (available symbols)
+        """
+        logger.info("clearing_system_caches")
+        
+        # Clear signal validator cache
+        if self.signal_validator:
+            self.signal_validator.clear_cache()
+            logger.info("signal_validator_cache_cleared")
+            
+        # Clear signal queue
+        if self.signal_queue:
+            self.signal_queue.clear()
+            logger.info("signal_queue_cleared")
+            
+        # Clear MT5 connection cache
+        if self.mt5_connection:
+            await self.mt5_connection.clear_cache()
+            logger.info("mt5_connection_cache_cleared")
+            
+        logger.info("all_caches_cleared")
+
 async def main() -> None:
     """Application entry point."""
     # Load environment variables
@@ -567,6 +594,13 @@ async def main() -> None:
     
     # Create and start application
     app = GoldMirror()
+    
+    # Add command line argument handling
+    if len(sys.argv) > 1 and sys.argv[1] == "--clear-cache":
+        await app.clear_cache()
+        logger.info("caches_cleared_exiting")
+        return
+        
     await app.start()
 
 if __name__ == "__main__":

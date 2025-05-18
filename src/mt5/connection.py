@@ -425,3 +425,14 @@ class MT5Connection:
             bool: True if in simulation mode, False otherwise
         """
         return self._simulation_mode 
+
+    async def clear_cache(self) -> None:
+        """Clear cached data and refresh from MT5."""
+        async with self._lock:
+            self._available_symbols.clear()
+            if self.is_connected:
+                # Refresh available symbols
+                symbols = self.mt5.symbols_get()
+                if symbols:
+                    self._available_symbols = {s.name for s in symbols}
+            logger.info("mt5_connection_cache_cleared") 
