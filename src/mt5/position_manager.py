@@ -266,13 +266,32 @@ class PositionManager:
                 
             # Special handling for XAU/USD
             if symbol == "XAUUSD":
+                # Get account info first to ensure we have it
+                account_info = mt5.account_info()
+                if not account_info:
+                    logger.error(
+                        "account_info_not_found_for_gold",
+                        symbol=symbol
+                    )
+                    return None
+                    
+                # Validate risk parameters
+                if self.risk_config.risk_per_trade <= 0 or self.risk_config.risk_per_trade > 100:
+                    logger.error(
+                        "invalid_risk_per_trade",
+                        risk_per_trade=self.risk_config.risk_per_trade,
+                        symbol=symbol
+                    )
+                    return None
+                    
                 # Calculate stop loss in pips (1 pip = 0.01 for Gold)
                 stop_loss_pips = abs(entry_price - stop_loss) * 100  # Convert to pips
                 if stop_loss_pips == 0:
                     logger.error(
                         "invalid_stop_loss_pips",
                         entry_price=entry_price,
-                        stop_loss=stop_loss
+                        stop_loss=stop_loss,
+                        symbol=symbol
                     )
                     return None
                 
@@ -282,7 +301,7 @@ class PositionManager:
                 logger.info(
                     "gold_position_calculation_details",
                     symbol=symbol,
-                    account_balance=account_info.balance if account_info else None,
+                    account_balance=account_info.balance,
                     risk_per_trade_pct=self.risk_config.risk_per_trade,
                     risk_amount=risk_amount,
                     entry_price=entry_price,
@@ -301,7 +320,9 @@ class PositionManager:
                         "position_size_below_minimum",
                         calculated_size=position_size,
                         minimum_size=symbol_info.volume_min,
-                        symbol=symbol
+                        symbol=symbol,
+                        risk_amount=risk_amount,
+                        stop_loss_pips=stop_loss_pips
                     )
                     return None
                     
@@ -310,9 +331,24 @@ class PositionManager:
                         "position_size_above_maximum",
                         calculated_size=position_size,
                         maximum_size=symbol_info.volume_max,
-                        symbol=symbol
+                        symbol=symbol,
+                        risk_amount=risk_amount,
+                        stop_loss_pips=stop_loss_pips
                     )
                     return None
+                    
+                # Round to lot step
+                position_size = round(position_size / symbol_info.volume_step) * symbol_info.volume_step
+                
+                logger.info(
+                    "gold_position_size_final",
+                    symbol=symbol,
+                    initial_size=risk_amount / stop_loss_pips,
+                    rounded_size=position_size,
+                    lot_step=symbol_info.volume_step,
+                    risk_amount=risk_amount,
+                    stop_loss_pips=stop_loss_pips
+                )
             else:
                 # Original calculation for other symbols
                 price_risk = abs(entry_price - stop_loss)

@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from src.telegram.signal_parser import TradingSignal
 
 from .connection import MT5Connection
-from .position_manager import RiskConfig
+from .position_manager import RiskConfig, PositionManager
 
 logger = structlog.get_logger(__name__)
 
@@ -63,6 +63,7 @@ class TradeExecutor:
         self.simulation_mode = simulation_mode or connection.is_simulation_mode
         self._active_trades: Dict[str, Dict[str, Any]] = {}
         self._lock = asyncio.Lock()
+        self.position_manager = PositionManager(connection, risk_config)
         
     async def execute_signal(self, signal: "TradingSignal") -> TradeResult:
         """Execute a trading signal.
@@ -83,15 +84,49 @@ class TradeExecutor:
                         error="Signal validation failed",
                         simulation=self.simulation_mode
                     )
-                    
-                # Calculate position size
-                position_size = await self._calculate_position_size(signal)
-                if not position_size:
+                
+                # Ensure position manager is initialized
+                if not hasattr(self, 'position_manager') or self.position_manager is None:
+                    logger.error(
+                        "position_manager_not_initialized",
+                        symbol=signal.symbol
+                    )
                     return TradeResult(
                         success=False,
-                        error="Failed to calculate position size",
+                        error="Position manager not initialized",
                         simulation=self.simulation_mode
                     )
+                    
+                # Calculate position size
+                try:
+                    position_size = await self._calculate_position_size(signal)
+                    if not position_size:
+                        return TradeResult(
+                            success=False,
+                            error="Failed to calculate position size",
+                            simulation=self.simulation_mode
+                        )
+                except Exception as e:
+                    logger.error(
+                        "position_size_calculation_error",
+                        error=str(e),
+                        symbol=signal.symbol,
+                        entry=signal.entry_price,
+                        sl=signal.stop_loss
+                    )
+                    return TradeResult(
+                        success=False,
+                        error=f"Position size calculation error: {str(e)}",
+                        simulation=self.simulation_mode
+                    )
+                    
+                logger.info(
+                    "position_size_calculated",
+                    symbol=signal.symbol,
+                    size=position_size,
+                    entry=signal.entry_price,
+                    sl=signal.stop_loss
+                )
                     
                 if self.simulation_mode:
                     # Simulate trade execution
@@ -149,7 +184,7 @@ class TradeExecutor:
                     symbol=signal.symbol,
                     entry=signal.entry_price,
                     sl=signal.stop_loss,
-                    tp=signal.take_profits
+                    direction=signal.direction
                 )
                 return False
                 
@@ -286,27 +321,48 @@ class TradeExecutor:
         """
         try:
             if self.simulation_mode:
-                # Use fixed position size for simulation
+                logger.info(
+                    "using_simulation_position_size",
+                    symbol=signal.symbol,
+                    size=0.1
+                )
                 return 0.1  # 0.1 lots
                 
             # Use PositionManager for position size calculation
-            position_size = await self.position_manager.calculate_position_size(
-                symbol=signal.symbol,
-                entry_price=signal.entry_price,
-                stop_loss=signal.stop_loss
-            )
-            
-            if position_size is None:
-                logger.error(
-                    "position_size_calculation_failed",
+            try:
+                position_size = await self.position_manager.calculate_position_size(
                     symbol=signal.symbol,
+                    entry_price=signal.entry_price,
+                    stop_loss=signal.stop_loss
+                )
+                
+                if position_size is None:
+                    logger.error(
+                        "position_size_calculation_failed",
+                        symbol=signal.symbol,
+                        entry=signal.entry_price,
+                        sl=signal.stop_loss
+                    )
+                    return None
+                    
+                logger.info(
+                    "position_size_calculation_success",
+                    symbol=signal.symbol,
+                    size=position_size,
                     entry=signal.entry_price,
                     sl=signal.stop_loss
                 )
+                
+                return position_size
+                
+            except Exception as e:
+                logger.error(
+                    "position_manager_calculation_error",
+                    error=str(e),
+                    symbol=signal.symbol
+                )
                 return None
                 
-            return position_size
-            
         except Exception as e:
             logger.error(
                 "position_size_calculation_failed",
