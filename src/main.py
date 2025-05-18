@@ -456,16 +456,27 @@ class GoldMirror:
             # Process signal if executor is available
             if self.trade_executor:
                 try:
-                    await self.trade_executor.execute_signal(signal)
-                    logger.info(
-                        "signal_executed",
-                        symbol=signal.symbol,
-                        direction=signal.direction,
-                        message_id=message.get("message_id")
-                    )
+                    result = await self.trade_executor.execute_signal(signal)
+                    if result.success:
+                        logger.info(
+                            "signal_executed",
+                            symbol=signal.symbol,
+                            direction=signal.direction,
+                            order_id=result.order_id,
+                            simulation=result.simulation,
+                            message_id=message.get("message_id")
+                        )
+                    else:
+                        logger.error(
+                            "signal_execution_failed",
+                            symbol=signal.symbol,
+                            error=result.error,
+                            simulation=result.simulation,
+                            message_id=message.get("message_id")
+                        )
                 except Exception as e:
                     logger.error(
-                        "signal_execution_failed",
+                        "signal_execution_error",
                         symbol=signal.symbol,
                         error=str(e),
                         message_id=message.get("message_id")
