@@ -343,6 +343,29 @@ class MT5Connection:
         """
         return self._available_symbols.copy()
         
+    def is_symbol_available(self, symbol: str) -> bool:
+        """Check if a symbol is available for trading.
+        
+        Args:
+            symbol: Symbol to check (e.g., "XAUUSD")
+            
+        Returns:
+            bool indicating if symbol is available
+        """
+        if not self._connected:
+            logger.warning("checking_symbol_availability_not_connected")
+            return False
+            
+        # In simulation mode, allow common symbols
+        if self._simulation_mode:
+            common_symbols = {
+                'XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD',
+                'USDCAD', 'NZDUSD', 'USDCHF', 'EURGBP', 'EURJPY'
+            }
+            return symbol.upper() in common_symbols
+            
+        return symbol.upper() in self._available_symbols
+
     def get_connection_info(self) -> Dict[str, any]:
         """Get current connection information.
         

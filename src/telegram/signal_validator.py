@@ -14,6 +14,7 @@ from collections import deque
 import structlog
 
 from .signal_parser import TradingSignal
+from ..mt5.connection import MT5Connection
 
 logger = structlog.get_logger(__name__)
 
@@ -38,7 +39,8 @@ class SignalValidator:
         self,
         max_signal_age_minutes: int = 5,
         duplicate_window_minutes: int = 30,
-        cache_size: int = 100
+        cache_size: int = 100,
+        mt5_connection: Optional[MT5Connection] = None
     ):
         """Initialize the signal validator.
         
@@ -46,11 +48,12 @@ class SignalValidator:
             max_signal_age_minutes: Maximum age of a signal in minutes
             duplicate_window_minutes: Time window for duplicate detection
             cache_size: Size of the signal cache for duplicate detection
+            mt5_connection: Optional MT5 connection for symbol validation
         """
         self.max_signal_age = timedelta(minutes=max_signal_age_minutes)
         self.duplicate_window = timedelta(minutes=duplicate_window_minutes)
         self.signal_cache: deque[Tuple[datetime, TradingSignal]] = deque(maxlen=cache_size)
-        self.available_symbols: Set[str] = set()  # Will be populated by MT5 connection
+        self.mt5_connection = mt5_connection
         
     def validate_signal(self, signal: TradingSignal) -> ValidationResult:
         """Validate a trading signal.
@@ -165,18 +168,17 @@ class SignalValidator:
         Returns:
             ValidationResult indicating if symbol is valid
         """
-        if not self.available_symbols:
-            # If symbols list is empty, we haven't connected to MT5 yet
-            # For now, we'll use a basic validation
+        if not self.mt5_connection:
+            # If no MT5 connection, use basic validation
             if not symbol.isalpha() or len(symbol) != 6:
                 return ValidationResult(False, f"Invalid symbol format: {symbol}")
             return ValidationResult(True, "Symbol format validated (MT5 not connected)")
             
-        if symbol not in self.available_symbols:
+        if not self.mt5_connection.is_symbol_available(symbol):
             return ValidationResult(
                 False,
                 f"Symbol not available: {symbol}",
-                {"available_symbols": list(self.available_symbols)}
+                {"available_symbols": list(self.mt5_connection.available_symbols)}
             )
             
         return ValidationResult(True, "Symbol verified")
@@ -251,7 +253,7 @@ class SignalValidator:
         Args:
             symbols: Set of available trading symbols
         """
-        self.available_symbols = symbols
+        self.mt5_connection.update_available_symbols(symbols)
         logger.info(
             "updated_available_symbols",
             symbol_count=len(symbols),

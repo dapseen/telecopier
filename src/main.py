@@ -162,7 +162,8 @@ class GoldMirror:
         self.signal_validator = SignalValidator(
             max_signal_age_minutes=self.config.signal.max_signal_age,
             duplicate_window_minutes=30,  # Default value
-            cache_size=100  # Default value
+            cache_size=100,  # Default value
+            mt5_connection=None  # Will be set after MT5 connection is established
         )
         self.signal_queue = SignalQueue(
             max_queue_size=1000,  # Default value
@@ -235,7 +236,8 @@ class GoldMirror:
         self.signal_validator = SignalValidator(
             max_signal_age_minutes=self.config.signal.max_signal_age,
             duplicate_window_minutes=30,  # Default value
-            cache_size=100  # Default value
+            cache_size=100,  # Default value
+            mt5_connection=self.mt5_connection
         )
         # Use a basic set of symbols for simulation
         self.signal_validator.update_available_symbols({
@@ -263,7 +265,8 @@ class GoldMirror:
         self.signal_validator = SignalValidator(
             max_signal_age_minutes=self.config.signal.max_signal_age,
             duplicate_window_minutes=30,  # Default value
-            cache_size=100  # Default value
+            cache_size=100,  # Default value
+            mt5_connection=self.mt5_connection
         )
         # Update with actual available symbols from MT5
         if self.mt5_connection and self.mt5_connection.is_connected:
