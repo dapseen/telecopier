@@ -18,17 +18,17 @@ trading_sessions:
   - name: London
     start_time: "08:00"
     end_time: "16:00"
-    symbols: ["EURUSD", "GBPUSD", "EURGBP"]
+    symbols: ["EURUSD", "GBPUSD", "EURGBP", "XAUUSD", "XAGUSD"]
     timezone: "Europe/London"
   - name: New York
     start_time: "13:00"
     end_time: "22:00"
-    symbols: ["EURUSD", "GBPUSD", "EURGBP"]
+    symbols: ["EURUSD", "GBPUSD", "EURGBP", "XAUUSD", "XAGUSD"]
     timezone: "America/New_York"
   - name: Tokyo
     start_time: "00:00"
     end_time: "08:00"
-    symbols: ["EURUSD", "GBPUSD", "EURGBP"]
+    symbols: ["EURUSD", "GBPUSD", "EURGBP", "XAUUSD", "XAGUSD"]
     timezone: "Asia/Tokyo"
 
 # Position Management

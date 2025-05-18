@@ -1,29 +1,32 @@
 """Signal validator module for validating trading signals.
 
 This module implements the SignalValidator class which is responsible for validating
-trading signals before they are executed. It ensures signals are valid, timely,
-and safe to trade.
+trading signals before they are executed, including checks for:
+- Signal age
+- Duplicate detection
+- Symbol availability
+- Required fields
 """
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Any
 import logging
 from collections import deque
 
 import structlog
 
-from telegram.signal_parser import TradingSignal
+from .signal_parser import TradingSignal
 from mt5.connection import MT5Connection
 
 logger = structlog.get_logger(__name__)
 
 @dataclass
 class ValidationResult:
-    """Represents the result of a signal validation attempt."""
+    """Result of signal validation including validity status and details."""
     is_valid: bool
-    reason: str
-    details: Optional[Dict[str, any]] = None
+    reason: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
 
 class SignalValidator:
     """Validator for trading signals.
