@@ -133,8 +133,42 @@ class MT5Config(BaseModel):
     login: Optional[int] = None  # Loaded from MT5_LOGIN env var
     password: Optional[str] = None  # Loaded from MT5_PASSWORD env var
 
+    @classmethod
+    def from_environment(cls) -> "MT5Config":
+        """Create MT5Config from environment variables.
+        
+        Returns:
+            MT5Config: Configuration loaded from environment variables
+            
+        Raises:
+            ValueError: If required environment variables are missing
+        """
+        # Get required values
+        server = os.getenv("MT5_SERVER")
+        if not server:
+            raise ValueError("MT5_SERVER environment variable is required")
+            
+        login = os.getenv("MT5_LOGIN")
+        if not login:
+            raise ValueError("MT5_LOGIN environment variable is required")
+            
+        password = os.getenv("MT5_PASSWORD")
+        if not password:
+            raise ValueError("MT5_PASSWORD environment variable is required")
+            
+        # Create config with environment values
+        return cls(
+            server=server,
+            login=int(login),
+            password=password,
+            timeout_ms=int(os.getenv("MT5_TIMEOUT_MS", "60000")),
+            retry_delay_seconds=int(os.getenv("MT5_RETRY_DELAY_SECONDS", "5")),
+            max_retries=int(os.getenv("MT5_MAX_RETRIES", "3")),
+            health_check_interval_seconds=int(os.getenv("MT5_HEALTH_CHECK_INTERVAL_SECONDS", "30"))
+        )
+
     def __init__(self, **data):
-        """Initialize with environment variables for sensitive data."""
+        """Initialize with provided data."""
         super().__init__(**data)
         # Always load sensitive data from environment
         self.server = os.getenv("MT5_SERVER")
