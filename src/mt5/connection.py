@@ -8,28 +8,31 @@ This module implements the MT5Connection class which handles:
 """
 
 import os
+import platform
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Tuple
 import asyncio
 import time
 
-import MetaTrader5 as mt5
 import structlog
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+
+from .mt5_utils import get_mt5, is_mt5_available, is_platform_supported
 
 logger = structlog.get_logger(__name__)
 
-@dataclass
-class MT5Config:
+class MT5Config(BaseModel):
     """Configuration for MT5 connection."""
     server: str
     login: int
     password: str
-    timeout_ms: int = 60000
-    retry_delay_seconds: int = 5
-    max_retries: int = 3
-    health_check_interval_seconds: int = 30
+    timezone: str = "UTC"
+    timeout_ms: int = Field(default=60000, gt=0)
+    retry_delay_seconds: int = Field(default=5, gt=0)
+    max_retries: int = Field(default=3, gt=0)
+    health_check_interval_seconds: int = Field(default=30, gt=0)
 
 class MT5Connection:
     """Manages connection to MetaTrader 5 terminal.
@@ -41,13 +44,22 @@ class MT5Connection:
     - Session management
     """
     
-    def __init__(self, config: Optional[MT5Config] = None):
+    def __init__(self, config: MT5Config):
         """Initialize MT5 connection manager.
         
         Args:
-            config: Optional MT5 configuration. If not provided, will load from environment.
+            config: MT5 configuration
         """
-        self.config = config or self._load_config()
+        self.mt5 = get_mt5()
+        self._simulation_mode = not is_mt5_available()
+        
+        if self._simulation_mode:
+            if is_platform_supported():
+                logger.warning("mt5_not_installed")
+            else:
+                logger.warning("mt5_not_supported", platform=platform.system())
+            
+        self.config = config
         self._connected = False
         self._last_health_check = datetime.now()
         self._connection_attempts = 0
@@ -95,15 +107,15 @@ class MT5Connection:
                 
             try:
                 # Initialize MT5
-                if not mt5.initialize():
+                if not self.mt5.initialize():
                     logger.error(
                         "mt5_initialize_failed",
-                        error=mt5.last_error()
+                        error=self.mt5.last_error()
                     )
                     return False
                     
                 # Attempt login
-                if not mt5.login(
+                if not self.mt5.login(
                     login=self.config.login,
                     password=self.config.password,
                     server=self.config.server,
@@ -111,7 +123,7 @@ class MT5Connection:
                 ):
                     logger.error(
                         "mt5_login_failed",
-                        error=mt5.last_error()
+                        error=self.mt5.last_error()
                     )
                     return False
                     
@@ -154,7 +166,7 @@ class MT5Connection:
                     pass
                     
             # Shutdown MT5
-            mt5.shutdown()
+            self.mt5.shutdown()
             self._connected = False
             
             logger.info("mt5_disconnected")
@@ -185,11 +197,11 @@ class MT5Connection:
         """
         try:
             # Check if MT5 is still connected
-            if not mt5.terminal_info():
+            if not self.mt5.terminal_info():
                 return False
                 
             # Try a simple operation
-            if not mt5.symbols_total():
+            if not self.mt5.symbols_total():
                 return False
                 
             self._last_health_check = datetime.now()
@@ -219,7 +231,7 @@ class MT5Connection:
             self._connection_attempts += 1
             
             # Disconnect first
-            mt5.shutdown()
+            self.mt5.shutdown()
             self._connected = False
             
             # Wait before retrying
@@ -243,7 +255,7 @@ class MT5Connection:
     async def _update_available_symbols(self) -> None:
         """Update the list of available trading symbols."""
         try:
-            symbols = mt5.symbols_get()
+            symbols = self.mt5.symbols_get()
             if symbols:
                 self._available_symbols = {symbol.name for symbol in symbols}
                 logger.info(
@@ -288,8 +300,8 @@ class MT5Connection:
             }
             
         try:
-            terminal_info = mt5.terminal_info()
-            account_info = mt5.account_info()
+            terminal_info = self.mt5.terminal_info()
+            account_info = self.mt5.account_info()
             
             return {
                 "connected": True,
@@ -312,4 +324,13 @@ class MT5Connection:
             return {
                 "connected": False,
                 "error": str(e)
-            } 
+            }
+
+    @property
+    def is_simulation_mode(self) -> bool:
+        """Check if running in simulation mode.
+        
+        Returns:
+            bool: True if in simulation mode, False otherwise
+        """
+        return self._simulation_mode 
