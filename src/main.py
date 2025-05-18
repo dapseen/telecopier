@@ -50,6 +50,7 @@ class TradingSession(BaseModel):
     end_time: str
     symbols: List[str]
     timezone: str
+    is_24_7: bool = False
 
 class PositionConfig(BaseModel):
     """Position management configuration."""

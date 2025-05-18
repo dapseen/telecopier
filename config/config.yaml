@@ -9,6 +9,12 @@ trading:
   max_slippage: 5  # Points
 
 trading_sessions:
+  - name: Crypto
+    start_time: "00:00"
+    end_time: "23:59"
+    symbols: ["BTCUSD", "ETHUSD", "LTCUSD", "XRPUSD", "BCHUSD"]
+    timezone: "UTC"
+    is_24_7: true  # Indicates 24/7 trading session
   - name: London
     start_time: "08:00"
     end_time: "16:00"

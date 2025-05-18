@@ -24,12 +24,14 @@ class TradingSession:
         end_time: Session end time in UTC
         symbols: Set of symbols traded in this session
         timezone: Timezone for the session
+        is_24_7: Whether this is a 24/7 trading session
     """
     name: str
     start_time: time
     end_time: time
     symbols: Set[str]
     timezone: str
+    is_24_7: bool = False
 
 class MarketHours:
     """Validates trading sessions and market status.
@@ -80,6 +82,10 @@ class MarketHours:
             # Check if symbol is in any active session
             for session in self.sessions:
                 if symbol in session.symbols:
+                    # For 24/7 sessions, always return True
+                    if session.is_24_7:
+                        return True, ""
+                        
                     session_tz = pytz.timezone(session.timezone)
                     session_time = datetime.now(session_tz).time()
                     
@@ -102,6 +108,11 @@ class MarketHours:
         current_time = datetime.now(self.broker_timezone).time()
         
         for session in self.sessions:
+            # Always include 24/7 sessions
+            if session.is_24_7:
+                active_sessions.append(session.name)
+                continue
+                
             session_tz = pytz.timezone(session.timezone)
             session_time = datetime.now(session_tz).time()
             

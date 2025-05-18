@@ -65,15 +65,32 @@ async def test_mt5_connection():
             symbols=list(symbols)
         )
         
-        # Test symbol availability
-        test_symbols = ["XAUUSD", "EURUSD", "GBPUSD", "INVALID"]
-        for symbol in test_symbols:
+        # Test crypto symbols specifically
+        crypto_symbols = ["BTCUSD", "ETHUSD", "LTCUSD", "XRPUSD", "BCHUSD"]
+        logger.info("checking_crypto_symbols")
+        for symbol in crypto_symbols:
             is_available = connection.is_symbol_available(symbol)
-            logger.info(
-                "symbol_check",
-                symbol=symbol,
-                available=is_available
-            )
+            if is_available:
+                # Get symbol info if available
+                symbol_info = connection.mt5.symbol_info(symbol)
+                if symbol_info:
+                    logger.info(
+                        "crypto_symbol_info",
+                        symbol=symbol,
+                        available=is_available,
+                        bid=connection.mt5.symbol_info_tick(symbol).bid,
+                        ask=connection.mt5.symbol_info_tick(symbol).ask,
+                        volume_min=symbol_info.volume_min,
+                        volume_max=symbol_info.volume_max,
+                        trade_mode=symbol_info.trade_mode,
+                        trade_contract_size=symbol_info.trade_contract_size
+                    )
+            else:
+                logger.info(
+                    "crypto_symbol_check",
+                    symbol=symbol,
+                    available=is_available
+                )
             
         # Disconnect
         await connection.disconnect()
