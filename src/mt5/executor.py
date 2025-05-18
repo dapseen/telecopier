@@ -289,46 +289,22 @@ class TradeExecutor:
                 # Use fixed position size for simulation
                 return 0.1  # 0.1 lots
                 
-            # Get account balance
-            balance = await self.connection.get_account_balance()
-            if not balance:
-                return None
-                
-            # Calculate risk amount
-            risk_amount = balance * (self.risk_config.risk_per_trade / 100)
-            
-            # Calculate position size based on stop loss distance
-            if signal.direction == "BUY":
-                sl_distance = signal.entry_price - signal.stop_loss
-            else:  # SELL
-                sl_distance = signal.stop_loss - signal.entry_price
-                
-            if sl_distance <= 0:
-                return None
-                
-            # Get symbol info
-            symbol_info = await self.connection.get_symbol_info(signal.symbol)
-            if not symbol_info:
-                return None
-                
-            # Calculate position size in lots
-            point_value = symbol_info["point"] * symbol_info["trade_contract_size"]
-            position_size = risk_amount / (sl_distance * point_value)
-            
-            # Round to allowed lot step
-            position_size = round(position_size / symbol_info["volume_step"]) * symbol_info["volume_step"]
-            
-            # Ensure within allowed limits
-            position_size = min(
-                position_size,
-                symbol_info["volume_max"],
-                self.risk_config.max_position_size
-            )
-            position_size = max(
-                position_size,
-                symbol_info["volume_min"]
+            # Use PositionManager for position size calculation
+            position_size = await self.position_manager.calculate_position_size(
+                symbol=signal.symbol,
+                entry_price=signal.entry_price,
+                stop_loss=signal.stop_loss
             )
             
+            if position_size is None:
+                logger.error(
+                    "position_size_calculation_failed",
+                    symbol=signal.symbol,
+                    entry=signal.entry_price,
+                    sl=signal.stop_loss
+                )
+                return None
+                
             return position_size
             
         except Exception as e:
