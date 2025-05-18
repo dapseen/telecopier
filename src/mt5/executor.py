@@ -11,12 +11,16 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 import structlog
 from pydantic import BaseModel
 
-from telegram.signal_parser import TradingSignal
+# Import TradingSignal only when needed to avoid circular imports
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from src.telegram.signal_parser import TradingSignal
+
 from .connection import MT5Connection
 from .risk import RiskConfig
 
@@ -57,10 +61,10 @@ class TradeExecutor:
         self.connection = connection
         self.risk_config = risk_config
         self.simulation_mode = simulation_mode or connection.is_simulation_mode
-        self._active_trades: Dict[str, Dict] = {}
+        self._active_trades: Dict[str, Dict[str, Any]] = {}
         self._lock = asyncio.Lock()
         
-    async def execute_signal(self, signal: TradingSignal) -> TradeResult:
+    async def execute_signal(self, signal: "TradingSignal") -> TradeResult:
         """Execute a trading signal.
         
         Args:
@@ -108,7 +112,7 @@ class TradeExecutor:
                 simulation=self.simulation_mode
             )
             
-    async def _validate_signal(self, signal: TradingSignal) -> bool:
+    async def _validate_signal(self, signal: "TradingSignal") -> bool:
         """Validate signal against current market conditions.
         
         Args:
@@ -156,7 +160,7 @@ class TradeExecutor:
             )
             return False
             
-    def _validate_price_levels(self, signal: TradingSignal) -> bool:
+    def _validate_price_levels(self, signal: "TradingSignal") -> bool:
         """Validate price levels in the signal.
         
         Args:
@@ -202,7 +206,7 @@ class TradeExecutor:
             )
             return False
             
-    async def _calculate_position_size(self, signal: TradingSignal) -> Optional[float]:
+    async def _calculate_position_size(self, signal: "TradingSignal") -> Optional[float]:
         """Calculate position size based on risk parameters.
         
         Args:
@@ -266,7 +270,7 @@ class TradeExecutor:
             )
             return None
             
-    async def _simulate_trade(self, signal: TradingSignal, position_size: float) -> TradeResult:
+    async def _simulate_trade(self, signal: "TradingSignal", position_size: float) -> TradeResult:
         """Simulate trade execution.
         
         Args:
@@ -321,7 +325,7 @@ class TradeExecutor:
                 simulation=True
             )
             
-    async def _execute_real_trade(self, signal: TradingSignal, position_size: float) -> TradeResult:
+    async def _execute_real_trade(self, signal: "TradingSignal", position_size: float) -> TradeResult:
         """Execute a real trade.
         
         Args:
