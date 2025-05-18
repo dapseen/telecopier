@@ -1,0 +1,315 @@
+"""MT5 connection management module.
+
+This module implements the MT5Connection class which handles:
+- Secure connection to MetaTrader 5
+- Connection monitoring and health checks
+- Automatic reconnection
+- Session management
+"""
+
+import os
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Set, Tuple
+import asyncio
+import time
+
+import MetaTrader5 as mt5
+import structlog
+from dotenv import load_dotenv
+
+logger = structlog.get_logger(__name__)
+
+@dataclass
+class MT5Config:
+    """Configuration for MT5 connection."""
+    server: str
+    login: int
+    password: str
+    timeout_ms: int = 60000
+    retry_delay_seconds: int = 5
+    max_retries: int = 3
+    health_check_interval_seconds: int = 30
+
+class MT5Connection:
+    """Manages connection to MetaTrader 5 terminal.
+    
+    This class handles the connection to MT5, including:
+    - Secure login with credentials
+    - Connection monitoring
+    - Automatic reconnection
+    - Session management
+    """
+    
+    def __init__(self, config: Optional[MT5Config] = None):
+        """Initialize MT5 connection manager.
+        
+        Args:
+            config: Optional MT5 configuration. If not provided, will load from environment.
+        """
+        self.config = config or self._load_config()
+        self._connected = False
+        self._last_health_check = datetime.now()
+        self._connection_attempts = 0
+        self._lock = asyncio.Lock()
+        self._health_check_task: Optional[asyncio.Task] = None
+        self._available_symbols: Set[str] = set()
+        
+    @staticmethod
+    def _load_config() -> MT5Config:
+        """Load MT5 configuration from environment variables.
+        
+        Returns:
+            MT5Config object with connection settings
+            
+        Raises:
+            ValueError: If required environment variables are missing
+        """
+        load_dotenv()
+        
+        required_vars = {
+            "MT5_SERVER": os.getenv("MT5_SERVER"),
+            "MT5_LOGIN": os.getenv("MT5_LOGIN"),
+            "MT5_PASSWORD": os.getenv("MT5_PASSWORD")
+        }
+        
+        missing = [var for var, value in required_vars.items() if not value]
+        if missing:
+            raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+            
+        return MT5Config(
+            server=required_vars["MT5_SERVER"],
+            login=int(required_vars["MT5_LOGIN"]),
+            password=required_vars["MT5_PASSWORD"]
+        )
+        
+    async def connect(self) -> bool:
+        """Establish connection to MT5 terminal.
+        
+        Returns:
+            bool indicating if connection was successful
+        """
+        async with self._lock:
+            if self._connected:
+                return True
+                
+            try:
+                # Initialize MT5
+                if not mt5.initialize():
+                    logger.error(
+                        "mt5_initialize_failed",
+                        error=mt5.last_error()
+                    )
+                    return False
+                    
+                # Attempt login
+                if not mt5.login(
+                    login=self.config.login,
+                    password=self.config.password,
+                    server=self.config.server,
+                    timeout=self.config.timeout_ms
+                ):
+                    logger.error(
+                        "mt5_login_failed",
+                        error=mt5.last_error()
+                    )
+                    return False
+                    
+                self._connected = True
+                self._connection_attempts = 0
+                
+                # Update available symbols
+                await self._update_available_symbols()
+                
+                # Start health check task
+                self._health_check_task = asyncio.create_task(self._health_check_loop())
+                
+                logger.info(
+                    "mt5_connected",
+                    server=self.config.server,
+                    login=self.config.login
+                )
+                
+                return True
+                
+            except Exception as e:
+                logger.error(
+                    "mt5_connection_error",
+                    error=str(e)
+                )
+                return False
+                
+    async def disconnect(self) -> None:
+        """Disconnect from MT5 terminal."""
+        async with self._lock:
+            if not self._connected:
+                return
+                
+            # Stop health check task
+            if self._health_check_task:
+                self._health_check_task.cancel()
+                try:
+                    await self._health_check_task
+                except asyncio.CancelledError:
+                    pass
+                    
+            # Shutdown MT5
+            mt5.shutdown()
+            self._connected = False
+            
+            logger.info("mt5_disconnected")
+            
+    async def _health_check_loop(self) -> None:
+        """Monitor connection health and handle reconnection."""
+        while True:
+            try:
+                await asyncio.sleep(self.config.health_check_interval_seconds)
+                
+                if not await self._check_connection():
+                    logger.warning("mt5_connection_lost")
+                    await self._reconnect()
+                    
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(
+                    "health_check_error",
+                    error=str(e)
+                )
+                
+    async def _check_connection(self) -> bool:
+        """Check if MT5 connection is healthy.
+        
+        Returns:
+            bool indicating if connection is healthy
+        """
+        try:
+            # Check if MT5 is still connected
+            if not mt5.terminal_info():
+                return False
+                
+            # Try a simple operation
+            if not mt5.symbols_total():
+                return False
+                
+            self._last_health_check = datetime.now()
+            return True
+            
+        except Exception as e:
+            logger.error(
+                "connection_check_error",
+                error=str(e)
+            )
+            return False
+            
+    async def _reconnect(self) -> bool:
+        """Attempt to reconnect to MT5.
+        
+        Returns:
+            bool indicating if reconnection was successful
+        """
+        async with self._lock:
+            if self._connection_attempts >= self.config.max_retries:
+                logger.error(
+                    "max_reconnection_attempts",
+                    attempts=self._connection_attempts
+                )
+                return False
+                
+            self._connection_attempts += 1
+            
+            # Disconnect first
+            mt5.shutdown()
+            self._connected = False
+            
+            # Wait before retrying
+            await asyncio.sleep(self.config.retry_delay_seconds)
+            
+            # Attempt reconnection
+            success = await self.connect()
+            if success:
+                logger.info(
+                    "mt5_reconnected",
+                    attempt=self._connection_attempts
+                )
+            else:
+                logger.error(
+                    "mt5_reconnection_failed",
+                    attempt=self._connection_attempts
+                )
+                
+            return success
+            
+    async def _update_available_symbols(self) -> None:
+        """Update the list of available trading symbols."""
+        try:
+            symbols = mt5.symbols_get()
+            if symbols:
+                self._available_symbols = {symbol.name for symbol in symbols}
+                logger.info(
+                    "updated_available_symbols",
+                    count=len(self._available_symbols)
+                )
+        except Exception as e:
+            logger.error(
+                "update_symbols_error",
+                error=str(e)
+            )
+            
+    @property
+    def is_connected(self) -> bool:
+        """Check if connected to MT5.
+        
+        Returns:
+            bool indicating if connected
+        """
+        return self._connected
+        
+    @property
+    def available_symbols(self) -> Set[str]:
+        """Get list of available trading symbols.
+        
+        Returns:
+            Set of available symbol names
+        """
+        return self._available_symbols.copy()
+        
+    def get_connection_info(self) -> Dict[str, any]:
+        """Get current connection information.
+        
+        Returns:
+            Dictionary containing connection details
+        """
+        if not self._connected:
+            return {
+                "connected": False,
+                "last_health_check": None,
+                "connection_attempts": self._connection_attempts
+            }
+            
+        try:
+            terminal_info = mt5.terminal_info()
+            account_info = mt5.account_info()
+            
+            return {
+                "connected": True,
+                "server": self.config.server,
+                "login": self.config.login,
+                "last_health_check": self._last_health_check.isoformat(),
+                "connection_attempts": self._connection_attempts,
+                "terminal": {
+                    "connected": terminal_info.connected,
+                    "trade_allowed": terminal_info.trade_allowed,
+                    "balance": account_info.balance if account_info else None,
+                    "equity": account_info.equity if account_info else None
+                }
+            }
+        except Exception as e:
+            logger.error(
+                "get_connection_info_error",
+                error=str(e)
+            )
+            return {
+                "connected": False,
+                "error": str(e)
+            } 

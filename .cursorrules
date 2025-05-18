@@ -1,0 +1,121 @@
+{
+    "name": "Telegram-to-MT5 Signal Automation",
+    "description": "Rules for the GoldMirror trading automation project",
+    "version": "1.0.0",
+    "rules": {
+        "file_structure": {
+            "required_directories": [
+                "src/",
+                "src/telegram/",
+                "src/mt5/",
+                "src/risk/",
+                "src/analytics/",
+                "tests/",
+                "config/",
+                "logs/"
+            ],
+            "required_files": [
+                "requirements.txt",
+                "README.md",
+                ".env.example",
+                "config/config.yaml",
+                "src/__init__.py",
+                "src/main.py"
+            ]
+        },
+        "python": {
+            "style": {
+                "formatter": "black",
+                "line_length": 88,
+                "docstring_style": "google",
+                "type_hints": "required"
+            },
+            "testing": {
+                "framework": "pytest",
+                "coverage_threshold": 80,
+                "required_test_files": [
+                    "tests/test_telegram_parser.py",
+                    "tests/test_mt5_engine.py",
+                    "tests/test_risk_manager.py"
+                ]
+            },
+            "imports": {
+                "order": [
+                    "standard_library",
+                    "third_party",
+                    "local"
+                ],
+                "group_by_package": true
+            }
+        },
+        "security": {
+            "sensitive_files": [
+                ".env",
+                "config/secrets.yaml",
+                "*.pem",
+                "*.key"
+            ],
+            "required_checks": [
+                "no_hardcoded_credentials",
+                "no_hardcoded_api_keys",
+                "no_hardcoded_trading_parameters"
+            ]
+        },
+        "documentation": {
+            "required": [
+                "function_docstrings",
+                "class_docstrings",
+                "module_docstrings",
+                "type_hints"
+            ],
+            "readme_sections": [
+                "Installation",
+                "Configuration",
+                "Usage",
+                "Security",
+                "Development"
+            ]
+        },
+        "logging": {
+            "required_levels": [
+                "DEBUG",
+                "INFO",
+                "WARNING",
+                "ERROR",
+                "CRITICAL"
+            ],
+            "format": "structured",
+            "required_fields": [
+                "timestamp",
+                "level",
+                "module",
+                "function",
+                "message",
+                "trade_id"
+            ]
+        },
+        "trading": {
+            "required_validation": [
+                "risk_checks",
+                "market_hours",
+                "news_filter",
+                "position_sizing"
+            ],
+            "error_handling": [
+                "connection_loss",
+                "order_rejection",
+                "slippage",
+                "partial_fills"
+            ]
+        },
+        "code_review": {
+            "required_reviewers": 1,
+            "required_checks": [
+                "test_coverage",
+                "security_scan",
+                "performance_impact",
+                "risk_validation"
+            ]
+        }
+    }
+} 
