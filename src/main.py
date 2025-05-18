@@ -203,12 +203,15 @@ class GoldMirror:
             
             self.mt5_connection = MT5Connection(mt5_config)
             
+            # Add this line to establish the connection
+            if not await self.mt5_connection.connect():
+                logger.error("failed_to_connect_to_mt5")
+                raise RuntimeError("Failed to connect to MT5")
+            
             if self.mt5_connection.is_simulation_mode:
                 logger.warning("running_in_simulation_mode")
-                # Initialize simulation mode components
                 self._setup_simulation_mode()
             else:
-                # Initialize real trading components
                 self._setup_trading_mode()
             
             # Initialize Telegram client
