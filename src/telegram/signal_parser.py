@@ -42,20 +42,21 @@ class SignalParser:
     pattern matching, validation, and confidence scoring.
     """
     
-    # Common trading symbols
-    VALID_SYMBOLS = {
-        'XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD',
-        'USDCAD', 'NZDUSD', 'USDCHF', 'EURGBP', 'EURJPY'
-    }
-    
     # Direction keywords
     DIRECTION_KEYWORDS = {
         'buy': {'buy', 'long', 'b'},
         'sell': {'sell', 'short', 's'}
     }
     
-    def __init__(self):
-        """Initialize the signal parser with compiled regex patterns."""
+    def __init__(self, valid_symbols: Optional[set[str]] = None):
+        """Initialize the signal parser with compiled regex patterns.
+        
+        Args:
+            valid_symbols: Set of valid trading symbols. If None, will be populated from config.
+        """
+        # Initialize valid symbols from config if not provided
+        self.valid_symbols = valid_symbols or self._load_symbols_from_config()
+        
         # Pattern for symbol and direction
         self.symbol_pattern = re.compile(
             r'([A-Z]{6})\s+(buy|sell|long|short|b|s)',
@@ -79,6 +80,42 @@ class SignalParser:
             r'TP(\d+)\s*(\d+(?:\.\d+)?)(?:\s*\((\d+)\))?',
             re.IGNORECASE
         )
+
+    def _load_symbols_from_config(self) -> set[str]:
+        """Load valid symbols from trading sessions in config.yaml.
+        
+        Returns:
+            Set of valid trading symbols from all trading sessions.
+        """
+        try:
+            import yaml
+            from pathlib import Path
+            
+            # Load config file
+            config_path = Path("config/config.yaml")
+            if not config_path.exists():
+                logger.warning("config_file_not_found", path=str(config_path))
+                return set()
+                
+            with open(config_path, "r") as f:
+                config = yaml.safe_load(f)
+                
+            # Extract symbols from all trading sessions
+            symbols = set()
+            for session in config.get("trading_sessions", []):
+                symbols.update(session.get("symbols", []))
+                
+            logger.info(
+                "loaded_symbols_from_config",
+                symbol_count=len(symbols),
+                symbols=list(symbols)
+            )
+            return symbols
+            
+        except Exception as e:
+            logger.error("failed_to_load_symbols_from_config", error=str(e))
+            # Fallback to a minimal set of common symbols
+            return {'XAUUSD', 'EURUSD', 'GBPUSD', 'BTCUSD'}
 
     def parse(self, message: str) -> Optional[TradingSignal]:
         """Parse a trading signal message into a structured format.
@@ -131,7 +168,7 @@ class SignalParser:
             raise ValueError("Could not find symbol and direction in message")
             
         symbol, direction = match.groups()
-        if symbol not in self.VALID_SYMBOLS:
+        if symbol not in self.valid_symbols:
             raise ValueError(f"Invalid trading symbol: {symbol}")
             
         # Normalize direction

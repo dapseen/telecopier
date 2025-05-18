@@ -157,9 +157,14 @@ class GoldMirror:
         self.config = self._load_config(config_path)
         self._setup_logging()
 
+        # Extract valid symbols from trading sessions
+        valid_symbols = set()
+        for session in self.config.trading_sessions:
+            valid_symbols.update(session.symbols)
+
         # Initialize components
         self.telegram_client: Optional[SignalMonitor] = None
-        self.signal_parser = SignalParser()
+        self.signal_parser = SignalParser(valid_symbols=valid_symbols)
         self.signal_validator = SignalValidator(
             max_signal_age_minutes=self.config.signal.max_signal_age,
             duplicate_window_minutes=30,  # Default value
