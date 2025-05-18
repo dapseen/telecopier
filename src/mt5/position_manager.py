@@ -207,6 +207,12 @@ class PositionManager:
     ) -> Optional[float]:
         """Calculate position size based on risk parameters.
         
+        For XAU/USD (Gold):
+        - Standard lot = 100 oz
+        - 1 pip = $0.01
+        - Pip value = $1 per pip per lot
+        - Formula: Lot Size = Risk Amount / Stop Loss in pips
+        
         Args:
             symbol: Trading symbol
             entry_price: Entry price level
@@ -242,19 +248,43 @@ class PositionManager:
                     
                 risk_amount = account_info.balance * (self.risk_config.risk_per_trade / 100)
                 
-            # Calculate price risk
-            price_risk = abs(entry_price - stop_loss)
-            if price_risk == 0:
-                logger.error(
-                    "invalid_price_risk",
-                    entry_price=entry_price,
-                    stop_loss=stop_loss
-                )
-                return None
+            # Special handling for XAU/USD
+            if symbol == "XAUUSD":
+                # Calculate stop loss in pips (1 pip = 0.01 for Gold)
+                stop_loss_pips = abs(entry_price - stop_loss) * 100  # Convert to pips
+                if stop_loss_pips == 0:
+                    logger.error(
+                        "invalid_stop_loss_pips",
+                        entry_price=entry_price,
+                        stop_loss=stop_loss
+                    )
+                    return None
                 
-            # Calculate position size
-            tick_value = symbol_info.trade_tick_value
-            position_size = risk_amount / (price_risk * tick_value)
+                # For Gold, pip value is $1 per lot, so we can directly calculate lots
+                position_size = risk_amount / stop_loss_pips
+                
+                logger.info(
+                    "gold_position_calculation",
+                    symbol=symbol,
+                    risk_amount=risk_amount,
+                    stop_loss_pips=stop_loss_pips,
+                    calculated_lots=position_size
+                )
+            else:
+                # Original calculation for other symbols
+                price_risk = abs(entry_price - stop_loss)
+                if price_risk == 0:
+                    logger.error(
+                        "invalid_price_risk",
+                        entry_price=entry_price,
+                        stop_loss=stop_loss
+                    )
+                    return None
+                    
+                tick_value = symbol_info.trade_tick_value
+                point = symbol_info.point
+                monetary_risk_per_point = risk_amount / price_risk
+                position_size = monetary_risk_per_point / (tick_value * point)
             
             # Adjust to symbol lot step
             position_size = round(
