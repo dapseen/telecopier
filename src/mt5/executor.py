@@ -175,37 +175,103 @@ class TradeExecutor:
         try:
             # Basic price validation
             if signal.entry_price <= 0 or signal.stop_loss <= 0:
+                logger.warning(
+                    "invalid_price_values",
+                    symbol=signal.symbol,
+                    entry=signal.entry_price,
+                    sl=signal.stop_loss,
+                    direction=signal.direction
+                )
                 return False
                 
-            # Validate stop loss
-            if signal.direction == "BUY":
+            # Validate stop loss (case-insensitive)
+            direction = signal.direction.upper()
+            if direction == "BUY":
                 if signal.stop_loss >= signal.entry_price:
+                    logger.warning(
+                        "invalid_buy_sl",
+                        symbol=signal.symbol,
+                        entry=signal.entry_price,
+                        sl=signal.stop_loss,
+                        direction=direction
+                    )
                     return False
-            else:  # SELL
+            elif direction == "SELL":
                 if signal.stop_loss <= signal.entry_price:
+                    logger.warning(
+                        "invalid_sell_sl",
+                        symbol=signal.symbol,
+                        entry=signal.entry_price,
+                        sl=signal.stop_loss,
+                        direction=direction
+                    )
                     return False
+            else:
+                logger.warning(
+                    "invalid_direction",
+                    symbol=signal.symbol,
+                    direction=signal.direction
+                )
+                return False
                     
             # Validate take profit levels
             if not signal.take_profits:
+                logger.warning(
+                    "missing_take_profits",
+                    symbol=signal.symbol,
+                    direction=direction
+                )
                 return False
                 
             for tp in signal.take_profits:
                 if tp.price <= 0:
+                    logger.warning(
+                        "invalid_tp_price",
+                        symbol=signal.symbol,
+                        tp_level=tp.level,
+                        tp_price=tp.price,
+                        direction=direction
+                    )
                     return False
-                if signal.direction == "BUY":
+                if direction == "BUY":
                     if tp.price <= signal.entry_price:
+                        logger.warning(
+                            "invalid_buy_tp",
+                            symbol=signal.symbol,
+                            tp_level=tp.level,
+                            tp_price=tp.price,
+                            entry=signal.entry_price,
+                            direction=direction
+                        )
                         return False
                 else:  # SELL
                     if tp.price >= signal.entry_price:
+                        logger.warning(
+                            "invalid_sell_tp",
+                            symbol=signal.symbol,
+                            tp_level=tp.level,
+                            tp_price=tp.price,
+                            entry=signal.entry_price,
+                            direction=direction
+                        )
                         return False
                         
+            logger.info(
+                "price_levels_validated",
+                symbol=signal.symbol,
+                direction=direction,
+                entry=signal.entry_price,
+                sl=signal.stop_loss,
+                tps=[(tp.level, tp.price) for tp in signal.take_profits]
+            )
             return True
             
         except Exception as e:
             logger.error(
                 "price_validation_failed",
                 error=str(e),
-                symbol=signal.symbol
+                symbol=signal.symbol,
+                direction=signal.direction
             )
             return False
             
