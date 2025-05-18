@@ -65,6 +65,24 @@ async def test_mt5_connection():
             symbols=list(symbols)
         )
         
+        # List all symbols with their details
+        logger.info("checking_all_symbols_details")
+        all_symbols = connection.mt5.symbols_get()
+        if all_symbols:
+            for symbol in all_symbols:
+                if "BTC" in symbol.name:  # Focus on BTC-related symbols
+                    logger.info(
+                        "symbol_details",
+                        name=symbol.name,
+                        description=symbol.description,
+                        trade_mode=symbol.trade_mode,
+                        trade_contract_size=symbol.trade_contract_size,
+                        volume_min=symbol.volume_min,
+                        volume_max=symbol.volume_max,
+                        is_visible=symbol.visible,
+                        is_trade_allowed=symbol.trade_mode == connection.mt5.SYMBOL_TRADE_MODE_FULL
+                    )
+        
         # Test crypto symbols specifically
         crypto_symbols = ["BTCUSD", "ETHUSD", "LTCUSD", "XRPUSD", "BCHUSD"]
         logger.info("checking_crypto_symbols")
@@ -74,23 +92,53 @@ async def test_mt5_connection():
                 # Get symbol info if available
                 symbol_info = connection.mt5.symbol_info(symbol)
                 if symbol_info:
-                    logger.info(
-                        "crypto_symbol_info",
+                    # Get tick info only if symbol exists
+                    tick_info = connection.mt5.symbol_info_tick(symbol)
+                    if tick_info:
+                        logger.info(
+                            "crypto_symbol_info",
+                            symbol=symbol,
+                            available=is_available,
+                            bid=tick_info.bid,
+                            ask=tick_info.ask,
+                            volume_min=symbol_info.volume_min,
+                            volume_max=symbol_info.volume_max,
+                            trade_mode=symbol_info.trade_mode,
+                            trade_contract_size=symbol_info.trade_contract_size
+                        )
+                    else:
+                        logger.warning(
+                            "crypto_symbol_no_tick_info",
+                            symbol=symbol,
+                            available=is_available,
+                            reason="Symbol exists but no tick data available"
+                        )
+                else:
+                    logger.warning(
+                        "crypto_symbol_no_info",
                         symbol=symbol,
                         available=is_available,
-                        bid=connection.mt5.symbol_info_tick(symbol).bid,
-                        ask=connection.mt5.symbol_info_tick(symbol).ask,
-                        volume_min=symbol_info.volume_min,
-                        volume_max=symbol_info.volume_max,
-                        trade_mode=symbol_info.trade_mode,
-                        trade_contract_size=symbol_info.trade_contract_size
+                        reason="Symbol exists but no detailed info available"
                     )
             else:
-                logger.info(
-                    "crypto_symbol_check",
-                    symbol=symbol,
-                    available=is_available
-                )
+                # Check if symbol exists in MT5 but is not available for trading
+                symbol_info = connection.mt5.symbol_info(symbol)
+                if symbol_info:
+                    logger.warning(
+                        "crypto_symbol_not_available",
+                        symbol=symbol,
+                        available=is_available,
+                        reason="Symbol exists but not available for trading",
+                        trade_mode=symbol_info.trade_mode,
+                        trade_allowed=symbol_info.trade_mode == connection.mt5.SYMBOL_TRADE_MODE_FULL
+                    )
+                else:
+                    logger.warning(
+                        "crypto_symbol_not_found",
+                        symbol=symbol,
+                        available=is_available,
+                        reason="Symbol not found in MT5 terminal"
+                    )
             
         # Disconnect
         await connection.disconnect()
