@@ -239,11 +239,20 @@ class GoldMirror:
             cache_size=100,  # Default value
             mt5_connection=self.mt5_connection
         )
-        # Use a basic set of symbols for simulation
-        self.signal_validator.update_available_symbols({
+        
+        # Update available symbols for simulation
+        simulation_symbols = {
             'XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD',
             'USDCAD', 'NZDUSD', 'USDCHF', 'EURGBP', 'EURJPY'
-        })
+        }
+        
+        if self.mt5_connection:
+            self.mt5_connection.update_available_symbols(simulation_symbols)
+        else:
+            logger.warning(
+                "mt5_connection_not_available",
+                message="Running in simulation mode without MT5 connection"
+            )
         
     def _setup_trading_mode(self) -> None:
         """Set up components for real trading mode."""

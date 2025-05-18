@@ -7,7 +7,8 @@ with open("README.md", encoding="utf-8") as f:
 setup(
     name="goldmirror",
     version="1.0.0",
-    packages=find_packages(),
+    package_dir={"": "src"},  # Tell setuptools packages are under src
+    packages=find_packages(where="src"),  # Look for packages in src directory
     install_requires=[
         "python-dotenv>=1.0.0",
         "structlog>=23.1.0",

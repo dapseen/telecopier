@@ -1,10 +1,10 @@
-"""Trade execution module.
+"""MT5 trade execution module.
 
 This module implements the TradeExecutor class which handles:
-- Signal validation and execution
-- Position sizing and risk management
-- Order placement and management
-- Trade monitoring and adjustment
+- Trade execution in MT5
+- Position management
+- Risk management
+- Trade monitoring
 """
 
 import asyncio
@@ -16,9 +16,9 @@ from typing import Dict, List, Optional, Tuple
 import structlog
 from pydantic import BaseModel
 
+from telegram.signal_parser import TradingSignal
 from .connection import MT5Connection
 from .risk import RiskConfig
-from src.telegram.signal_parser import TradingSignal
 
 logger = structlog.get_logger(__name__)
 

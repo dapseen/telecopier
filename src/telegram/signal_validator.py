@@ -13,8 +13,8 @@ from collections import deque
 
 import structlog
 
-from .signal_parser import TradingSignal
-from ..mt5.connection import MT5Connection
+from telegram.signal_parser import TradingSignal
+from mt5.connection import MT5Connection
 
 logger = structlog.get_logger(__name__)
 
@@ -253,6 +253,13 @@ class SignalValidator:
         Args:
             symbols: Set of available trading symbols
         """
+        if not self.mt5_connection:
+            logger.warning(
+                "updating_symbols_without_mt5",
+                symbol_count=len(symbols)
+            )
+            return
+            
         self.mt5_connection.update_available_symbols(symbols)
         logger.info(
             "updated_available_symbols",
