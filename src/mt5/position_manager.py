@@ -264,12 +264,39 @@ class PositionManager:
                 position_size = risk_amount / stop_loss_pips
                 
                 logger.info(
-                    "gold_position_calculation",
+                    "gold_position_calculation_details",
                     symbol=symbol,
+                    account_balance=account_info.balance if account_info else None,
+                    risk_per_trade_pct=self.risk_config.risk_per_trade,
                     risk_amount=risk_amount,
+                    entry_price=entry_price,
+                    stop_loss=stop_loss,
+                    stop_loss_distance=abs(entry_price - stop_loss),
                     stop_loss_pips=stop_loss_pips,
-                    calculated_lots=position_size
+                    calculated_lots=position_size,
+                    volume_min=symbol_info.volume_min,
+                    volume_max=symbol_info.volume_max,
+                    volume_step=symbol_info.volume_step
                 )
+                
+                # Validate position size against symbol limits before rounding
+                if position_size < symbol_info.volume_min:
+                    logger.error(
+                        "position_size_below_minimum",
+                        calculated_size=position_size,
+                        minimum_size=symbol_info.volume_min,
+                        symbol=symbol
+                    )
+                    return None
+                    
+                if position_size > symbol_info.volume_max:
+                    logger.error(
+                        "position_size_above_maximum",
+                        calculated_size=position_size,
+                        maximum_size=symbol_info.volume_max,
+                        symbol=symbol
+                    )
+                    return None
             else:
                 # Original calculation for other symbols
                 price_risk = abs(entry_price - stop_loss)
