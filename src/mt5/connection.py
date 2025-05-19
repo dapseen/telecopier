@@ -515,11 +515,31 @@ class MT5Connection:
                     "error": f"Symbol {symbol} not found"
                 }
                 
-            # Determine filling mode based on symbol
-            if symbol == "XAUUSD":
-                filling_mode = self.mt5.ORDER_FILLING_IOC  # Immediate or Cancel for Gold
-            else:
-                filling_mode = self.mt5.ORDER_FILLING_FOK  # Fill or Kill for other symbols
+            # Get current price and format it according to symbol digits
+            current_price = price if price else self.mt5.symbol_info_tick(symbol).ask
+            digits = symbol_info.digits
+            
+            # Format prices to correct number of digits
+            formatted_price = round(current_price, digits)
+            formatted_sl = round(stop_loss, digits) if stop_loss else None
+            formatted_tp = round(take_profit, digits) if take_profit else None
+            
+            # Log price formatting details
+            logger.info(
+                "price_formatting_details",
+                symbol=symbol,
+                original_price=price,
+                original_sl=stop_loss,
+                original_tp=take_profit,
+                formatted_price=formatted_price,
+                formatted_sl=formatted_sl,
+                formatted_tp=formatted_tp,
+                digits=digits,
+                point=symbol_info.point,
+                trade_stops_level=symbol_info.trade_stops_level,
+                min_stop_distance=symbol_info.trade_stops_level * symbol_info.point,
+                actual_stop_distance=abs(formatted_price - formatted_sl) if formatted_sl else None
+            )
                 
             # Prepare order request
             request = {
@@ -527,29 +547,42 @@ class MT5Connection:
                 "symbol": symbol,
                 "volume": volume,
                 "type": self.mt5.ORDER_TYPE_BUY if direction == "BUY" else self.mt5.ORDER_TYPE_SELL,
-                "price": price if price else self.mt5.symbol_info_tick(symbol).ask,
-                "sl": stop_loss,
-                "tp": take_profit,
+                "price": formatted_price,
+                "sl": formatted_sl,
+                "tp": formatted_tp,
                 "deviation": deviation,
                 "magic": magic,
                 "comment": comment,
                 "type_time": self.mt5.ORDER_TIME_GTC,
-                "type_filling": filling_mode,  # Use symbol-specific filling mode
+                "type_filling": self.mt5.ORDER_FILLING_IOC if symbol == "XAUUSD" else self.mt5.ORDER_FILLING_FOK,
             }
             
+            # Log the final request
             logger.info(
-                "placing_order",
+                "order_request_details",
                 symbol=symbol,
-                direction=direction,
-                volume=volume,
-                filling_mode="IOC" if symbol == "XAUUSD" else "FOK",
-                price=request["price"],
-                sl=stop_loss,
-                tp=take_profit
+                request=request,
+                price_digits=digits,
+                point_value=symbol_info.point,
+                stop_level=symbol_info.trade_stops_level
             )
             
             # Send order
             result = self.mt5.order_send(request)
+            
+            # Log the result
+            logger.info(
+                "order_send_result",
+                symbol=symbol,
+                retcode=result.retcode,
+                comment=result.comment,
+                order_id=result.order,
+                volume=result.volume,
+                price=result.price,
+                sl=result.sl,
+                tp=result.tp
+            )
+            
             if result.retcode != self.mt5.TRADE_RETCODE_DONE:
                 return {
                     "success": False,
