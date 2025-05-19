@@ -509,8 +509,143 @@ class TradeExecutor:
                 )
                 return False
                 
+    async def setup_trade_management(
+        self,
+        order_id: int,
+        take_profits: List[Tuple[float, float]],  # List of (price, volume_fraction)
+        initial_sl: float,
+        entry_price: float
+    ) -> bool:
+        """Set up trade management with partial take profits and dynamic stop loss.
+        
+        Args:
+            order_id: The order ID to manage
+            take_profits: List of tuples containing (price, volume_fraction)
+            initial_sl: Initial stop loss price
+            entry_price: Entry price of the position
+            
+        Returns:
+            bool: True if setup was successful
+        """
+        try:
+            # Validate position exists
+            position = mt5.positions_get(ticket=order_id)
+            if not position:
+                logger.error(
+                    "position_not_found_for_management",
+                    order_id=order_id
+                )
+                return False
+                
+            position = position[0]
+            
+            # Set up partial take profits
+            partial_tps = [
+                PartialTP(volume=volume, price=price)
+                for price, volume in take_profits
+            ]
+            
+            # Set up breakeven for first TP
+            first_tp_price = take_profits[0][0]
+            breakeven_config = BreakevenConfig(
+                activation_price=first_tp_price,
+                offset_points=5,  # 5 points above breakeven for safety
+                triggered=False
+            )
+            
+            # Store the management configuration
+            self._partial_tps[order_id] = partial_tps
+            self._breakeven_configs[order_id] = breakeven_config
+            
+            # Store SL management levels
+            self._active_orders[order_id].update({
+                "sl_levels": {
+                    "initial": initial_sl,
+                    "after_tp1": entry_price + 5 * mt5.symbol_info(position.symbol).point,  # breakeven + 5
+                    "after_tp2": first_tp_price,  # Move to first TP after second TP
+                    "after_tp3": take_profits[1][0]  # Move to second TP after third TP
+                }
+            })
+            
+            logger.info(
+                "trade_management_setup",
+                order_id=order_id,
+                tp_count=len(take_profits),
+                initial_sl=initial_sl,
+                entry_price=entry_price,
+                first_tp=first_tp_price
+            )
+            
+            return True
+            
+        except Exception as e:
+            logger.error(
+                "trade_management_setup_failed",
+                error=str(e),
+                order_id=order_id
+            )
+            return False
+
+    async def _handle_partial_tp_triggered(
+        self,
+        order_id: int,
+        tp_price: float,
+        remaining_volume: float
+    ) -> None:
+        """Handle stop loss modification after a partial TP is triggered.
+        
+        Args:
+            order_id: The order ID
+            tp_price: The take profit price that was hit
+            remaining_volume: Remaining position volume after partial close
+        """
+        try:
+            position = mt5.positions_get(ticket=order_id)
+            if not position:
+                return
+                
+            position = position[0]
+            order_info = self._active_orders.get(order_id, {})
+            sl_levels = order_info.get("sl_levels", {})
+            
+            # Determine which TP was hit and update SL accordingly
+            if tp_price == sl_levels.get("after_tp1"):
+                # First TP hit, move to breakeven + 5
+                new_sl = sl_levels["after_tp1"]
+            elif tp_price == sl_levels.get("after_tp2"):
+                # Second TP hit, move to first TP
+                new_sl = sl_levels["after_tp2"]
+            elif tp_price == sl_levels.get("after_tp3"):
+                # Third TP hit, move to second TP
+                new_sl = sl_levels["after_tp3"]
+            else:
+                return  # Unknown TP level
+                
+            # Modify stop loss
+            modification = OrderModification(
+                order_id=order_id,
+                stop_loss=new_sl
+            )
+            
+            if await self.modify_order(modification):
+                logger.info(
+                    "sl_updated_after_tp",
+                    order_id=order_id,
+                    tp_price=tp_price,
+                    new_sl=new_sl,
+                    remaining_volume=remaining_volume
+                )
+                
+        except Exception as e:
+            logger.error(
+                "sl_update_after_tp_failed",
+                error=str(e),
+                order_id=order_id,
+                tp_price=tp_price
+            )
+
     async def check_partial_tps(self) -> None:
-        """Check and execute partial take profits."""
+        """Check and execute partial take profits with SL management."""
         if not self.connection.is_connected:
             return
             
@@ -537,6 +672,12 @@ class TradeExecutor:
                             # Close partial position
                             if await self.close_order(order_id, close_volume):
                                 tp.triggered = True
+                                # Handle SL modification after TP
+                                await self._handle_partial_tp_triggered(
+                                    order_id,
+                                    tp.price,
+                                    position.volume - close_volume
+                                )
                                 logger.info(
                                     "partial_tp_triggered",
                                     order_id=order_id,
@@ -688,4 +829,131 @@ class TradeExecutor:
             "total_profit": sum(pos["profit"] for pos in positions),
             "total_swap": sum(pos["swap"] for pos in positions),
             "risk_compliance": await self.position_manager.check_risk_limits()
-        } 
+        }
+
+    async def execute_gold_trade(
+        self,
+        symbol: str,
+        direction: str,
+        entry: float,
+        sl: float,
+        tps: List[Tuple[float, float]],
+        comment: str = "GoldMirror Trade"
+    ) -> Optional[int]:
+        """Execute a complete gold trade with risk management and TP levels.
+        
+        Args:
+            symbol: Trading symbol (e.g., "XAUUSD")
+            direction: "BUY" or "SELL"
+            entry: Entry price
+            sl: Stop loss price
+            tps: List of tuples containing (price, volume_fraction)
+            comment: Trade comment
+            
+        Returns:
+            Optional[int]: Order ticket if successful, None otherwise
+        """
+        try:
+            # Validate inputs
+            if not tps or len(tps) != 4:
+                logger.error("invalid_tp_levels", count=len(tps))
+                return None
+                
+            if not all(0 < tp[1] <= 1 for tp in tps):
+                logger.error("invalid_tp_volumes", tps=tps)
+                return None
+                
+            # Create order request
+            order_request = OrderRequest(
+                symbol=symbol,
+                action=OrderAction.BUY if direction.upper() == "BUY" else OrderAction.SELL,
+                order_type=OrderType.MARKET,
+                volume=0.0,  # Will be calculated by risk manager
+                price=entry,
+                stop_loss=sl,
+                take_profit=None,  # We'll set TPs after order is placed
+                comment=comment,
+                magic=123456 
+            )
+            
+            # Place the order
+            order_id = await self.place_order(order_request)
+            if not order_id:
+                logger.error("order_placement_failed")
+                return None
+                
+            # Set up trade management
+            success = await self.setup_trade_management(
+                order_id=order_id,
+                take_profits=tps,
+                initial_sl=sl,
+                entry_price=entry
+            )
+            
+            if not success:
+                logger.error("trade_management_setup_failed", order_id=order_id)
+                # Close the order if management setup fails
+                await self.close_order(order_id)
+                return None
+                
+            logger.info(
+                "gold_trade_executed",
+                order_id=order_id,
+                symbol=symbol,
+                direction=direction,
+                entry=entry,
+                sl=sl,
+                tps=tps
+            )
+            
+            return order_id
+            
+        except Exception as e:
+            logger.error(
+                "gold_trade_execution_failed",
+                error=str(e),
+                symbol=symbol,
+                direction=direction
+            )
+            return None
+
+    async def monitor_trade(self, order_id: int) -> None:
+        """Monitor and manage an active trade.
+        
+        Args:
+            order_id: The order ID to monitor
+        """
+        try:
+            while True:
+                # Check if order still exists
+                position = mt5.positions_get(ticket=order_id)
+                if not position:
+                    logger.info("trade_closed", order_id=order_id)
+                    break
+                    
+                # Check partial TPs
+                await self.check_partial_tps()
+                
+                # Check breakeven levels
+                await self.check_breakeven()
+                
+                # Get current trade status
+                trade_info = await self.get_order_info(order_id)
+                if trade_info:
+                    logger.info(
+                        "trade_status",
+                        order_id=order_id,
+                        profit=trade_info["profit"],
+                        current_price=trade_info["price_current"],
+                        remaining_volume=trade_info["volume"]
+                    )
+                    
+                # Sleep to prevent excessive CPU usage
+                await asyncio.sleep(1)
+                
+        except Exception as e:
+            logger.error(
+                "trade_monitoring_error",
+                error=str(e),
+                order_id=order_id
+            ) 

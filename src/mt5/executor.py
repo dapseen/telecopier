@@ -427,7 +427,7 @@ class TradeExecutor:
             )
             
     async def _execute_real_trade(self, signal: "TradingSignal", position_size: float) -> TradeResult:
-        """Execute a real trade.
+        """Execute a real trade with partial take profit management.
         
         Args:
             signal: The trading signal to execute
@@ -445,7 +445,7 @@ class TradeExecutor:
                 "direction": signal.direction,
                 "volume": position_size,
                 "stop_loss": signal.stop_loss,
-                "take_profit": signal.take_profits[0].price if signal.take_profits else None,
+                "take_profit": None,  # We'll manage TPs separately
                 "comment": f"Signal Entry: {signal.entry_price}"  # Store intended entry in comment
             }
             
@@ -456,7 +456,6 @@ class TradeExecutor:
                 direction=signal.direction,
                 intended_entry=signal.entry_price,
                 stop_loss=signal.stop_loss,
-                take_profit=order_params["take_profit"],
                 volume=position_size
             )
             
@@ -469,7 +468,7 @@ class TradeExecutor:
                     success=False,
                     error="Invalid order result format",
                     simulation=False
-            )
+                )
             
             if not order_result.get("success", False):
                 return TradeResult(
@@ -494,6 +493,30 @@ class TradeExecutor:
                     symbol=signal.symbol,
                     order_id=order_id
                 )
+                return TradeResult(
+                    success=False,
+                    error="No execution price received",
+                    simulation=False
+                )
+                
+            # Set up trade management with partial take profits
+            # Calculate volume fractions for each TP
+            tp_volumes = [0.25] * len(signal.take_profits)  # Equal distribution
+            take_profits = list(zip([tp.price for tp in signal.take_profits], tp_volumes))
+            
+            # Set up trade management
+            if not await self.setup_trade_management(
+                order_id=order_id,
+                take_profits=take_profits,
+                initial_sl=signal.stop_loss,
+                entry_price=actual_price
+            ):
+                logger.error(
+                    "trade_management_setup_failed",
+                    order_id=order_id,
+                    symbol=signal.symbol
+                )
+                # Don't return error here as the trade is already placed
                 
             # Record the trade with actual execution price
             self._active_trades[signal.symbol] = {

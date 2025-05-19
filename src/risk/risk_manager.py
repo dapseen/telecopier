@@ -19,17 +19,23 @@ class RiskParameters:
     """Risk parameters for trading account management.
     
     Attributes:
-        max_daily_loss_pct: Maximum daily loss as percentage of account balance
+        risk_per_trade_pct: Percentage of account balance to risk per trade
         max_position_size_pct: Maximum position size as percentage of account balance
         max_open_positions: Maximum number of open positions allowed
-        max_risk_per_trade_pct: Maximum risk per trade as percentage of account balance
+        max_daily_loss_pct: Maximum daily loss as percentage of account balance
+        daily_loss_limit: Maximum daily loss in account currency (absolute value)
         min_account_balance: Minimum required account balance
+        cooldown_after_loss: Seconds to wait after a loss before trading again
+        max_slippage: Maximum allowed slippage in points
     """
-    max_daily_loss_pct: Decimal
+    risk_per_trade_pct: Decimal
     max_position_size_pct: Decimal
     max_open_positions: int
-    max_risk_per_trade_pct: Decimal
+    max_daily_loss_pct: Decimal
+    daily_loss_limit: Decimal
     min_account_balance: Decimal
+    cooldown_after_loss: int
+    max_slippage: int
 
 class RiskManager:
     """Manages trading risk and position sizing.
@@ -53,7 +59,8 @@ class RiskManager:
             "daily_pnl": Decimal("0"),
             "daily_trades": 0,
             "max_drawdown": Decimal("0"),
-            "last_reset": datetime.now()
+            "last_reset": datetime.now(),
+            "last_loss_time": None
         }
         
     def validate_account_balance(self) -> Tuple[bool, str]:
@@ -97,16 +104,39 @@ class RiskManager:
                 return False, "Failed to fetch account information"
                 
             daily_pnl = Decimal(str(account_info.profit)) - self.daily_stats["daily_pnl"]
-            max_daily_loss = account_info.balance * float(self.risk_params.max_daily_loss_pct)
             
-            if daily_pnl < -max_daily_loss:
-                return False, f"Daily loss limit reached: {daily_pnl} < -{max_daily_loss}"
+            # Check both percentage and absolute daily loss limits
+            max_daily_loss_pct = account_info.balance * float(self.risk_params.max_daily_loss_pct)
+            max_daily_loss_abs = self.risk_params.daily_loss_limit
+            
+            if daily_pnl < -max_daily_loss_pct:
+                return False, f"Daily loss percentage limit reached: {daily_pnl} < -{max_daily_loss_pct}"
+            if daily_pnl < -max_daily_loss_abs:
+                return False, f"Daily loss absolute limit reached: {daily_pnl} < -{max_daily_loss_abs}"
                 
             return True, ""
             
         except Exception as e:
             logger.error(f"Error checking daily loss limit: {str(e)}")
             return False, f"Error checking daily loss limit: {str(e)}"
+            
+    def check_cooldown_period(self) -> Tuple[bool, str]:
+        """Check if we're in cooldown period after a loss.
+        
+        Returns:
+            Tuple containing:
+                - bool: True if cooldown period has passed, False otherwise
+                - str: Error message if in cooldown, empty string otherwise
+        """
+        if self.daily_stats["last_loss_time"] is None:
+            return True, ""
+            
+        cooldown_end = self.daily_stats["last_loss_time"] + timedelta(seconds=self.risk_params.cooldown_after_loss)
+        if datetime.now() < cooldown_end:
+            remaining = cooldown_end - datetime.now()
+            return False, f"In cooldown period after loss. {remaining.seconds} seconds remaining"
+            
+        return True, ""
             
     def calculate_position_size(
         self,
@@ -140,7 +170,7 @@ class RiskManager:
                 
             # Calculate risk amount if not provided
             if risk_amount is None:
-                risk_amount = Decimal(str(account_info.balance)) * self.risk_params.max_risk_per_trade_pct
+                risk_amount = Decimal(str(account_info.balance)) * self.risk_params.risk_per_trade_pct
                 
             # Calculate position size based on risk
             price_risk = abs(entry_price - stop_loss)
@@ -169,7 +199,8 @@ class RiskManager:
             "daily_pnl": Decimal("0"),
             "daily_trades": 0,
             "max_drawdown": Decimal("0"),
-            "last_reset": datetime.now()
+            "last_reset": datetime.now(),
+            "last_loss_time": None
         }
         
     def update_daily_stats(self, pnl: Decimal) -> None:
@@ -183,4 +214,8 @@ class RiskManager:
         self.daily_stats["max_drawdown"] = min(
             self.daily_stats["max_drawdown"],
             self.daily_stats["daily_pnl"]
-        ) 
+        )
+        
+        # Update last loss time if this was a losing trade
+        if pnl < 0:
+            self.daily_stats["last_loss_time"] = datetime.now() 

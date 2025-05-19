@@ -1,13 +1,22 @@
 # GoldMirror Trading Configuration
 
-# Trading Parameters
-trading:
-  risk_per_trade: 0.25  # Percentage of account balance
-  max_open_trades: 2
-  daily_loss_limit: 200  # In account currency
-  cooldown_after_loss: 3600  # Seconds
-  max_slippage: 5  # Points
+# Risk Management Parameters
+risk:
+  # Position Sizing
+  risk_per_trade_pct: 0.25  # Percentage of account balance to risk per trade
+  max_position_size_pct: 0.02  # Maximum position size as percentage of account
+  max_open_positions: 2  # Maximum number of open positions allowed
+  
+  # Loss Limits
+  max_daily_loss_pct: 1.09  # Maximum daily loss as percentage of account
+  daily_loss_limit: 200  # Maximum daily loss in account currency
+  min_account_balance: 100  # Minimum account balance required to trade
+  
+  # Trade Management
+  cooldown_after_loss: 3600  # Seconds to wait after a loss
+  max_slippage: 5  # Maximum allowed slippage in points
 
+# Trading Sessions
 trading_sessions:
   - name: Crypto
     start_time: "00:00"
@@ -105,12 +114,5 @@ mt5:
   retry_delay_seconds: 5
   max_retries: 3
   health_check_interval_seconds: 30
-
-risk:
-  max_daily_loss_pct: 0.06
-  max_position_size_pct: 0.02
-  max_open_positions: 1
-  max_risk_per_trade_pct: 0.02
-  min_account_balance: 100
 
 
