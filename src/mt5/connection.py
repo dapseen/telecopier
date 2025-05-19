@@ -482,26 +482,7 @@ class MT5Connection:
         max_modify_retries: int = 3,
         modify_retry_delay: float = 1.0
     ) -> Dict[str, Any]:
-        """Place a trading order.
-        
-        For market orders, this uses a two-step process:
-        1. Place the order without SL/TP
-        2. Modify the order to add SL/TP with retry logic
-        
-        Args:
-            symbol: Trading symbol (e.g., "XAUUSD")
-            order_type: Type of order ("MARKET" or "PENDING")
-            direction: Order direction ("BUY" or "SELL")
-            volume: Order volume in lots
-            price: Order price (required for pending orders)
-            stop_loss: Stop loss price
-            take_profit: Take profit price
-            comment: Order comment
-            magic: Magic number for order identification
-            deviation: Maximum price deviation in points
-            max_modify_retries: Maximum number of retries for modification
-            modify_retry_delay: Delay between modification retries in seconds
-        """
+        """Place a trading order."""
         if not self.is_connected:
             return {
                 "success": False,
@@ -522,13 +503,15 @@ class MT5Connection:
             current_ask = self.mt5.symbol_info_tick(symbol).ask
             current_bid = self.mt5.symbol_info_tick(symbol).bid
             
-            # Log current market prices
+            # Log current market prices with explicit direction check
             logger.info(
                 "current_market_prices",
                 symbol=symbol,
                 ask=current_ask,
                 bid=current_bid,
                 direction=direction.upper(),
+                is_buy=direction.upper() == "BUY",
+                is_sell=direction.upper() == "SELL",
                 spread=current_ask - current_bid,
                 spread_points=int((current_ask - current_bid) / symbol_info.point)
             )
@@ -539,19 +522,26 @@ class MT5Connection:
                 formatted_price = None
                 # For buy orders, ALWAYS use ask price; for sell orders, ALWAYS use bid price
                 entry_price = current_ask if direction.upper() == "BUY" else current_bid
+                
+                # Log order type and price selection
                 logger.info(
-                    "market_order_entry_price",
+                    "market_order_details",
                     symbol=symbol,
-                    direction=direction.upper(),
+                    direction=direction,
+                    is_buy=direction.upper() == "BUY",
+                    is_sell=direction.upper() == "SELL",
                     entry_price=entry_price,
-                    price_type="ASK" if direction.upper() == "BUY" else "BID"
+                    price_type="ASK" if direction.upper() == "BUY" else "BID",
+                    mt5_order_type=0 if direction.upper() == "BUY" else 1,  # Fixed order type mapping
+                    mt5_buy_type=0,  # ORDER_TYPE_BUY
+                    mt5_sell_type=1  # ORDER_TYPE_SELL
                 )
             else:
                 current_price = price if price else current_ask
                 formatted_price = round(current_price, digits)
                 entry_price = formatted_price
             
-            # Format stop loss and take profit
+            # Format stop loss and take profit as actual price levels
             formatted_sl = round(stop_loss, digits) if stop_loss else None
             formatted_tp = round(take_profit, digits) if take_profit else None
             
@@ -562,7 +552,7 @@ class MT5Connection:
                     "action": self.mt5.TRADE_ACTION_DEAL,
                     "symbol": symbol,
                     "volume": volume,
-                    "type": self.mt5.ORDER_TYPE_BUY if direction == "BUY" else self.mt5.ORDER_TYPE_SELL,
+                    "type": 0 if direction.upper() == "BUY" else 1,  # Fixed order type mapping
                     "deviation": deviation,
                     "magic": magic,
                     "comment": comment,
@@ -570,25 +560,33 @@ class MT5Connection:
                     "type_filling": self.mt5.ORDER_FILLING_IOC if symbol == "XAUUSD" else self.mt5.ORDER_FILLING_FOK,
                 }
                 
-                # Log the initial request
+                # Log the initial request with explicit type verification
                 logger.info(
                     "placing_market_order_without_sl_tp",
                     symbol=symbol,
+                    direction=direction,
+                    request_type=request["type"],
+                    is_buy=request["type"] == 0,  # ORDER_TYPE_BUY
+                    is_sell=request["type"] == 1,  # ORDER_TYPE_SELL
                     request=request
                 )
                 
                 # Send initial order
                 result = self.mt5.order_send(request)
                 
-                # Log the result
+                # Log the result with explicit type verification
                 logger.info(
                     "initial_order_result",
                     symbol=symbol,
+                    direction=direction,
                     retcode=result.retcode,
                     comment=result.comment,
                     order_id=result.order,
                     volume=result.volume,
-                    price=result.price
+                    price=result.price,
+                    request_type=request["type"],
+                    is_buy=request["type"] == 0,  # ORDER_TYPE_BUY
+                    is_sell=request["type"] == 1  # ORDER_TYPE_SELL
                 )
                 
                 if result.retcode != self.mt5.TRADE_RETCODE_DONE:
@@ -634,14 +632,31 @@ class MT5Connection:
                         time=position.time
                     )
                     
-                    # Prepare modification request
+                    # Prepare modification request with actual price levels
                     modify_request = {
                         "action": self.mt5.TRADE_ACTION_SLTP,
                         "symbol": symbol,
-                        "position": position.ticket,  # Use position.ticket instead of result.order
-                        "sl": formatted_sl,
-                        "tp": formatted_tp
+                        "position": position.ticket,
+                        "sl": formatted_sl,  # Using actual price level
+                        "tp": formatted_tp   # Using actual price level
                     }
+                    
+                    # Log modification attempt with price levels
+                    logger.info(
+                        "modifying_order_with_sl_tp_attempt",
+                        symbol=symbol,
+                        order_id=result.order,
+                        position_ticket=position.ticket,
+                        attempt=1,
+                        max_attempts=max_modify_retries,
+                        request=modify_request,
+                        current_price_open=position.price_open,
+                        current_sl=position.sl,
+                        current_tp=position.tp,
+                        sl_distance=abs(position.price_open - formatted_sl) if formatted_sl else None,
+                        tp_distance=abs(position.price_open - formatted_tp) if formatted_tp else None,
+                        min_stop_level=symbol_info.trade_stops_level * symbol_info.point
+                    )
                     
                     # Retry loop for modification
                     modify_success = False
