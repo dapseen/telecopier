@@ -478,13 +478,29 @@ class MT5Connection:
         take_profit: Optional[float] = None,
         comment: str = "",
         magic: int = 0,
-        deviation: int = 10
+        deviation: int = 10,
+        max_modify_retries: int = 3,
+        modify_retry_delay: float = 1.0
     ) -> Dict[str, Any]:
         """Place a trading order.
         
         For market orders, this uses a two-step process:
         1. Place the order without SL/TP
-        2. Modify the order to add SL/TP
+        2. Modify the order to add SL/TP with retry logic
+        
+        Args:
+            symbol: Trading symbol (e.g., "XAUUSD")
+            order_type: Type of order ("MARKET" or "PENDING")
+            direction: Order direction ("BUY" or "SELL")
+            volume: Order volume in lots
+            price: Order price (required for pending orders)
+            stop_loss: Stop loss price
+            take_profit: Take profit price
+            comment: Order comment
+            magic: Magic number for order identification
+            deviation: Maximum price deviation in points
+            max_modify_retries: Maximum number of retries for modification
+            modify_retry_delay: Delay between modification retries in seconds
         """
         if not self.is_connected:
             return {
@@ -581,7 +597,7 @@ class MT5Connection:
                         "error": f"Initial order placement failed: {result.comment} (code: {result.retcode})"
                     }
                     
-                # Step 2: Modify order to add SL/TP
+                # Step 2: Modify order to add SL/TP with retry logic
                 if formatted_sl or formatted_tp:
                     # Get the position
                     position = self.mt5.positions_get(ticket=result.order)
@@ -602,41 +618,76 @@ class MT5Connection:
                         "tp": formatted_tp
                     }
                     
-                    # Log modification request
-                    logger.info(
-                        "modifying_order_with_sl_tp",
-                        symbol=symbol,
-                        order_id=result.order,
-                        request=modify_request,
-                        current_price=position.price,
-                        current_sl=position.sl,
-                        current_tp=position.tp
-                    )
+                    # Retry loop for modification
+                    modify_success = False
+                    last_error = None
                     
-                    # Send modification request
-                    modify_result = self.mt5.order_send(modify_request)
+                    for attempt in range(max_modify_retries):
+                        # Log modification attempt
+                        logger.info(
+                            "modifying_order_with_sl_tp_attempt",
+                            symbol=symbol,
+                            order_id=result.order,
+                            attempt=attempt + 1,
+                            max_attempts=max_modify_retries,
+                            request=modify_request,
+                            current_price=position.price,
+                            current_sl=position.sl,
+                            current_tp=position.tp
+                        )
+                        
+                        # Send modification request
+                        modify_result = self.mt5.order_send(modify_request)
+                        
+                        # Log modification result
+                        logger.info(
+                            "modification_result",
+                            symbol=symbol,
+                            retcode=modify_result.retcode,
+                            comment=modify_result.comment,
+                            order_id=result.order,
+                            attempt=attempt + 1,
+                            requested_sl=formatted_sl,
+                            requested_tp=formatted_tp
+                        )
+                        
+                        if modify_result.retcode == self.mt5.TRADE_RETCODE_DONE:
+                            modify_success = True
+                            break
+                            
+                        last_error = f"Modification attempt {attempt + 1} failed: {modify_result.comment} (code: {modify_result.retcode})"
+                        
+                        # Wait before retry
+                        if attempt < max_modify_retries - 1:
+                            await asyncio.sleep(modify_retry_delay)
+                            
+                            # Refresh position info before retry
+                            position = self.mt5.positions_get(ticket=result.order)
+                            if position:
+                                position = position[0]
+                                logger.info(
+                                    "refreshed_position_before_retry",
+                                    symbol=symbol,
+                                    order_id=result.order,
+                                    attempt=attempt + 2,
+                                    current_price=position.price,
+                                    current_sl=position.sl,
+                                    current_tp=position.tp
+                                )
                     
-                    # Log modification result
-                    logger.info(
-                        "modification_result",
-                        symbol=symbol,
-                        retcode=modify_result.retcode,
-                        comment=modify_result.comment,
-                        order_id=result.order,
-                        requested_sl=formatted_sl,
-                        requested_tp=formatted_tp
-                    )
-                    
-                    if modify_result.retcode != self.mt5.TRADE_RETCODE_DONE:
+                    if not modify_success:
                         return {
                             "success": False,
-                            "error": f"Order modification failed: {modify_result.comment} (code: {modify_result.retcode})"
+                            "error": last_error,
+                            "order_id": result.order,  # Still return order_id even if modification failed
+                            "modification_failed": True
                         }
                 
                 return {
                     "success": True,
                     "order_id": result.order,
-                    "price": result.price
+                    "price": result.price,
+                    "modification_success": formatted_sl is not None or formatted_tp is not None
                 }
             else:
                 # For pending orders, proceed as before
