@@ -482,23 +482,9 @@ class MT5Connection:
     ) -> Dict[str, Any]:
         """Place a trading order.
         
-        Args:
-            symbol: Trading symbol
-            order_type: Type of order (MARKET, LIMIT, STOP)
-            direction: Order direction (BUY, SELL)
-            volume: Position size in lots
-            price: Order price (required for pending orders)
-            stop_loss: Stop loss price
-            take_profit: Take profit price
-            comment: Order comment
-            magic: Magic number for order identification
-            deviation: Maximum price deviation in points
-            
-        Returns:
-            Dict containing:
-                success: bool indicating if order was placed
-                order_id: int order ticket if successful
-                error: str error message if failed
+        For market orders, this uses a two-step process:
+        1. Place the order without SL/TP
+        2. Modify the order to add SL/TP
         """
         if not self.is_connected:
             return {
@@ -526,7 +512,9 @@ class MT5Connection:
                 symbol=symbol,
                 ask=current_ask,
                 bid=current_bid,
-                direction=direction.upper()
+                direction=direction.upper(),
+                spread=current_ask - current_bid,
+                spread_points=int((current_ask - current_bid) / symbol_info.point)
             )
             
             # For market orders, we use current ask for buy and current bid for sell
@@ -551,144 +539,140 @@ class MT5Connection:
             formatted_sl = round(stop_loss, digits) if stop_loss else None
             formatted_tp = round(take_profit, digits) if take_profit else None
             
-            # Calculate stop distances
-            if formatted_sl:
-                # Always use the correct price for calculations:
-                # For buy orders: current_ask - stop_loss
-                # For sell orders: stop_loss - current_bid
-                if direction.upper() == "BUY":
-                    price_difference = current_ask - formatted_sl  # Always use ask for buy orders
-                    price_used = current_ask
-                    price_type = "ASK"
-                else:
-                    price_difference = formatted_sl - current_bid  # Always use bid for sell orders
-                    price_used = current_bid
-                    price_type = "BID"
-                    
-                # Convert price difference to points (1 point = symbol_info.point)
-                sl_distance_points = int(price_difference / symbol_info.point)
-                
-                # Log detailed stop loss validation
-                logger.info(
-                    "stop_loss_validation",
-                    symbol=symbol,
-                    direction=direction.upper(),
-                    order_type=order_type,
-                    current_ask=current_ask,
-                    current_bid=current_bid,
-                    price_used=price_used,
-                    price_type=price_type,
-                    stop_loss=formatted_sl,
-                    price_difference=price_difference,
-                    points=sl_distance_points,
-                    min_required_points=symbol_info.trade_stops_level,
-                    point_value=symbol_info.point,
-                    is_valid=sl_distance_points >= symbol_info.trade_stops_level
-                )
-                
-                # Validate stop loss distance
-                if sl_distance_points < symbol_info.trade_stops_level:
-                    return {
-                        "success": False,
-                        "error": f"Stop loss too close to entry price. Required: {symbol_info.trade_stops_level} points, Got: {sl_distance_points} points (price difference: {price_difference:.2f})"
-                    }
-            
-            # Log price formatting details
-            logger.info(
-                "price_formatting_details",
-                symbol=symbol,
-                order_type=order_type,
-                direction=direction,
-                original_price=price,
-                original_sl=stop_loss,
-                original_tp=take_profit,
-                current_ask=current_ask,
-                current_bid=current_bid,
-                entry_price=entry_price,
-                formatted_price=formatted_price,
-                formatted_sl=formatted_sl,
-                formatted_tp=formatted_tp,
-                digits=digits,
-                point=symbol_info.point,
-                trade_stops_level=symbol_info.trade_stops_level,
-                min_stop_distance=symbol_info.trade_stops_level * symbol_info.point
-            )
-                
-            # Prepare order request
-            request = {
-                "action": self.mt5.TRADE_ACTION_DEAL if order_type == "MARKET" else self.mt5.TRADE_ACTION_PENDING,
-                "symbol": symbol,
-                "volume": volume,
-                "type": self.mt5.ORDER_TYPE_BUY if direction == "BUY" else self.mt5.ORDER_TYPE_SELL,
-                "deviation": deviation,
-                "magic": magic,
-                "comment": comment,
-                "type_time": self.mt5.ORDER_TIME_GTC,
-                "type_filling": self.mt5.ORDER_FILLING_IOC if symbol == "XAUUSD" else self.mt5.ORDER_FILLING_FOK,
-            }
-            
-            # Only add price for pending orders
-            if order_type != "MARKET":
-                request["price"] = formatted_price
-                
-            # Add stop loss and take profit if specified
-            if formatted_sl:
-                request["sl"] = formatted_sl
-            if formatted_tp:
-                request["tp"] = formatted_tp
-            
-            # Log the final request
-            logger.info(
-                "order_request_details",
-                symbol=symbol,
-                request=request,
-                price_digits=digits,
-                point_value=symbol_info.point,
-                stop_level=symbol_info.trade_stops_level
-            )
-            
-            # Send order
-            result = self.mt5.order_send(request)
-            
-            # Log the result with execution price verification
-            logger.info(
-                "order_send_result",
-                symbol=symbol,
-                retcode=result.retcode,
-                comment=result.comment,
-                order_id=result.order,
-                volume=result.volume,
-                execution_price=result.price,
-                expected_price=current_ask if direction.upper() == "BUY" else current_bid,
-                price_type="ASK" if direction.upper() == "BUY" else "BID",
-                request_sl=request.get("sl"),
-                request_tp=request.get("tp"),
-                price_difference=abs(result.price - (current_ask if direction.upper() == "BUY" else current_bid)),
-                deviation_points=int(abs(result.price - (current_ask if direction.upper() == "BUY" else current_bid)) / symbol_info.point)
-            )
-            
-            if result.retcode != self.mt5.TRADE_RETCODE_DONE:
-                return {
-                    "success": False,
-                    "error": f"Order placement failed: {result.comment} (code: {result.retcode})"
+            # For market orders, we'll use a two-step process
+            if order_type == "MARKET":
+                # Step 1: Place order without SL/TP
+                request = {
+                    "action": self.mt5.TRADE_ACTION_DEAL,
+                    "symbol": symbol,
+                    "volume": volume,
+                    "type": self.mt5.ORDER_TYPE_BUY if direction == "BUY" else self.mt5.ORDER_TYPE_SELL,
+                    "deviation": deviation,
+                    "magic": magic,
+                    "comment": comment,
+                    "type_time": self.mt5.ORDER_TIME_GTC,
+                    "type_filling": self.mt5.ORDER_FILLING_IOC if symbol == "XAUUSD" else self.mt5.ORDER_FILLING_FOK,
                 }
                 
-            logger.info(
-                "order_placed",
-                symbol=symbol,
-                direction=direction,
-                volume=volume,
-                order_id=result.order,
-                price=result.price,
-                filling_mode="IOC" if symbol == "XAUUSD" else "FOK"
-            )
-            
-            return {
-                "success": True,
-                "order_id": result.order,
-                "price": result.price
-            }
-            
+                # Log the initial request
+                logger.info(
+                    "placing_market_order_without_sl_tp",
+                    symbol=symbol,
+                    request=request
+                )
+                
+                # Send initial order
+                result = self.mt5.order_send(request)
+                
+                # Log the result
+                logger.info(
+                    "initial_order_result",
+                    symbol=symbol,
+                    retcode=result.retcode,
+                    comment=result.comment,
+                    order_id=result.order,
+                    volume=result.volume,
+                    price=result.price
+                )
+                
+                if result.retcode != self.mt5.TRADE_RETCODE_DONE:
+                    return {
+                        "success": False,
+                        "error": f"Initial order placement failed: {result.comment} (code: {result.retcode})"
+                    }
+                    
+                # Step 2: Modify order to add SL/TP
+                if formatted_sl or formatted_tp:
+                    # Get the position
+                    position = self.mt5.positions_get(ticket=result.order)
+                    if not position:
+                        return {
+                            "success": False,
+                            "error": "Position not found after order placement"
+                        }
+                        
+                    position = position[0]
+                    
+                    # Prepare modification request
+                    modify_request = {
+                        "action": self.mt5.TRADE_ACTION_SLTP,
+                        "symbol": symbol,
+                        "position": result.order,
+                        "sl": formatted_sl,
+                        "tp": formatted_tp
+                    }
+                    
+                    # Log modification request
+                    logger.info(
+                        "modifying_order_with_sl_tp",
+                        symbol=symbol,
+                        order_id=result.order,
+                        request=modify_request,
+                        current_price=position.price,
+                        current_sl=position.sl,
+                        current_tp=position.tp
+                    )
+                    
+                    # Send modification request
+                    modify_result = self.mt5.order_send(modify_request)
+                    
+                    # Log modification result
+                    logger.info(
+                        "modification_result",
+                        symbol=symbol,
+                        retcode=modify_result.retcode,
+                        comment=modify_result.comment,
+                        order_id=result.order,
+                        requested_sl=formatted_sl,
+                        requested_tp=formatted_tp
+                    )
+                    
+                    if modify_result.retcode != self.mt5.TRADE_RETCODE_DONE:
+                        return {
+                            "success": False,
+                            "error": f"Order modification failed: {modify_result.comment} (code: {modify_result.retcode})"
+                        }
+                
+                return {
+                    "success": True,
+                    "order_id": result.order,
+                    "price": result.price
+                }
+            else:
+                # For pending orders, proceed as before
+                request = {
+                    "action": self.mt5.TRADE_ACTION_PENDING,
+                    "symbol": symbol,
+                    "volume": volume,
+                    "type": self.mt5.ORDER_TYPE_BUY if direction == "BUY" else self.mt5.ORDER_TYPE_SELL,
+                    "price": formatted_price,
+                    "deviation": deviation,
+                    "magic": magic,
+                    "comment": comment,
+                    "type_time": self.mt5.ORDER_TIME_GTC,
+                    "type_filling": self.mt5.ORDER_FILLING_IOC if symbol == "XAUUSD" else self.mt5.ORDER_FILLING_FOK,
+                }
+                
+                if formatted_sl:
+                    request["sl"] = formatted_sl
+                if formatted_tp:
+                    request["tp"] = formatted_tp
+                    
+                # Send order
+                result = self.mt5.order_send(request)
+                
+                if result.retcode != self.mt5.TRADE_RETCODE_DONE:
+                    return {
+                        "success": False,
+                        "error": f"Order placement failed: {result.comment} (code: {result.retcode})"
+                    }
+                    
+                return {
+                    "success": True,
+                    "order_id": result.order,
+                    "price": result.price
+                }
+                
         except Exception as e:
             logger.error(
                 "order_placement_error",
