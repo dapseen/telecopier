@@ -180,7 +180,7 @@ class RiskManager:
                 
             # Calculate risk amount if not provided
             if risk_amount is None:
-                # Convert risk_per_trade_pct to actual amount (e.g., 0.25% -> 0.0025)
+                # Convert risk_per_trade_pct to decimal (e.g., 0.25% -> 0.0025)
                 risk_pct = self.risk_params.risk_per_trade_pct
                 if risk_pct > 1:
                     risk_pct = risk_pct / 100
@@ -198,9 +198,11 @@ class RiskManager:
             if price_risk == 0:
                 return Decimal("0"), "Invalid price risk (entry price equals stop loss)"
                 
-            # For XAUUSD, 1 lot = 100 oz, and 1 pip = $0.01
-            # So 1 pip movement = $1 per lot
-            # Therefore, risk per pip = risk_amount / price_risk_in_pips
+            # For XAUUSD:
+            # 1 lot = 100 oz
+            # 1 pip = $0.01
+            # 1 pip movement = $1 per lot
+            # So risk per pip = risk_amount / price_risk_in_pips
             price_risk_pips = price_risk * 100  # Convert to pips (0.01 = 1 pip)
             position_size = risk_amount / price_risk_pips
             
@@ -225,7 +227,9 @@ class RiskManager:
                 risk_amount=float(risk_amount),
                 price_risk_pips=float(price_risk_pips),
                 position_size=float(position_size),
-                max_position_size=float(max_position_lots)
+                max_position_size=float(max_position_lots),
+                account_balance=float(account_info.balance),
+                risk_per_trade_pct=float(self.risk_params.risk_per_trade_pct * 100)
             )
             
             return position_size, ""

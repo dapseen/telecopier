@@ -259,18 +259,38 @@ class AnalyticsConfig(BaseModel):
 class RiskConfig(BaseModel):
     """Risk management configuration from config.yaml."""
     # Position Sizing
-    risk_per_trade_pct: float = Field(gt=0, le=1)
-    max_position_size_pct: float = Field(gt=0, le=1)
+    risk_per_trade_pct: float = Field(gt=0, le=5)  # Max 5% risk per trade
+    max_position_size_pct: float = Field(gt=0, le=2)  # Max 2% position size
     max_open_positions: int = Field(gt=0)
     
     # Loss Limits
-    max_daily_loss_pct: float = Field(gt=0, le=1)
+    max_daily_loss_pct: float = Field(gt=0, le=5)  # Max 5% daily loss
     daily_loss_limit: float = Field(gt=0)
     min_account_balance: float = Field(gt=0)
     
     # Trade Management
     cooldown_after_loss: int = Field(gt=0)
     max_slippage: int = Field(gt=0)
+
+    @field_validator("risk_per_trade_pct", "max_position_size_pct", "max_daily_loss_pct")
+    @classmethod
+    def validate_percentage(cls, v: float) -> float:
+        """Validate percentage values.
+        
+        Args:
+            v: Percentage value to validate
+            
+        Returns:
+            float: Validated percentage value
+            
+        Raises:
+            ValueError: If percentage is invalid
+        """
+        if v > 100:
+            v = v / 100  # Convert from whole number to decimal
+        if not 0 < v <= 5:  # Max 5% risk
+            raise ValueError("Risk percentage must be between 0 and 5%")
+        return v
 
     def to_position_risk_config(self, account_balance: float) -> PositionRiskConfig:
         """Convert to PositionManager RiskConfig.
@@ -281,12 +301,17 @@ class RiskConfig(BaseModel):
         Returns:
             PositionRiskConfig: Risk configuration for position management
         """
+        # Ensure percentages are in decimal form
+        risk_per_trade = self.risk_per_trade_pct if self.risk_per_trade_pct <= 1 else self.risk_per_trade_pct / 100
+        max_daily_loss = self.max_daily_loss_pct if self.max_daily_loss_pct <= 1 else self.max_daily_loss_pct / 100
+        max_symbol_risk = self.max_position_size_pct if self.max_position_size_pct <= 1 else self.max_position_size_pct / 100
+        
         return PositionRiskConfig(
             account_balance=account_balance,
-            risk_per_trade=self.risk_per_trade_pct * 100,  # Convert to percentage
+            risk_per_trade=risk_per_trade * 100,  # Convert to percentage for position manager
             max_open_trades=self.max_open_positions,
-            max_daily_loss=self.max_daily_loss_pct * 100,  # Convert to percentage
-            max_symbol_risk=self.max_position_size_pct * 100,  # Convert to percentage
+            max_daily_loss=max_daily_loss * 100,  # Convert to percentage for position manager
+            max_symbol_risk=max_symbol_risk * 100,  # Convert to percentage for position manager
             daily_loss_limit=self.daily_loss_limit,
             cooldown_after_loss=self.cooldown_after_loss,
             max_slippage=self.max_slippage,
