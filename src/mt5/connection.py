@@ -515,6 +515,12 @@ class MT5Connection:
                     "error": f"Symbol {symbol} not found"
                 }
                 
+            # Determine filling mode based on symbol
+            if symbol == "XAUUSD":
+                filling_mode = self.mt5.ORDER_FILLING_IOC  # Immediate or Cancel for Gold
+            else:
+                filling_mode = self.mt5.ORDER_FILLING_FOK  # Fill or Kill for other symbols
+                
             # Prepare order request
             request = {
                 "action": self.mt5.TRADE_ACTION_DEAL if order_type == "MARKET" else self.mt5.TRADE_ACTION_PENDING,
@@ -528,8 +534,19 @@ class MT5Connection:
                 "magic": magic,
                 "comment": comment,
                 "type_time": self.mt5.ORDER_TIME_GTC,
-                "type_filling": self.mt5.ORDER_FILLING_FOK,
+                "type_filling": filling_mode,  # Use symbol-specific filling mode
             }
+            
+            logger.info(
+                "placing_order",
+                symbol=symbol,
+                direction=direction,
+                volume=volume,
+                filling_mode="IOC" if symbol == "XAUUSD" else "FOK",
+                price=request["price"],
+                sl=stop_loss,
+                tp=take_profit
+            )
             
             # Send order
             result = self.mt5.order_send(request)
@@ -545,7 +562,8 @@ class MT5Connection:
                 direction=direction,
                 volume=volume,
                 order_id=result.order,
-                price=result.price
+                price=result.price,
+                filling_mode="IOC" if symbol == "XAUUSD" else "FOK"
             )
             
             return {
