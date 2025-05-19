@@ -448,16 +448,32 @@ class TradeExecutor:
                 take_profit=signal.take_profits[0].price if signal.take_profits else None
             )
             
-            if not order_result.success:
+            # Handle dictionary response from place_order
+            if not isinstance(order_result, dict):
                 return TradeResult(
                     success=False,
-                    error=order_result.error,
+                    error="Invalid order result format",
+                    simulation=False
+                )
+                
+            if not order_result.get("success", False):
+                return TradeResult(
+                    success=False,
+                    error=order_result.get("error", "Unknown error"),
+                    simulation=False
+                )
+                
+            order_id = order_result.get("order_id")
+            if not order_id:
+                return TradeResult(
+                    success=False,
+                    error="No order ID in response",
                     simulation=False
                 )
                 
             # Record the trade
             self._active_trades[signal.symbol] = {
-                "order_id": order_result.order_id,
+                "order_id": order_id,
                 "symbol": signal.symbol,
                 "direction": signal.direction,
                 "entry_price": signal.entry_price,
@@ -476,12 +492,12 @@ class TradeExecutor:
                 sl=signal.stop_loss,
                 tp=[tp.price for tp in signal.take_profits],
                 size=position_size,
-                order_id=order_result.order_id
+                order_id=order_id
             )
             
             return TradeResult(
                 success=True,
-                order_id=order_result.order_id,
+                order_id=order_id,
                 simulation=False
             )
             
