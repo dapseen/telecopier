@@ -579,8 +579,8 @@ class MT5Connection:
                 order_id=result.order,
                 volume=result.volume,
                 price=result.price,
-                sl=result.sl,
-                tp=result.tp
+                request_sl=request["sl"],
+                request_tp=request["tp"]
             )
             
             if result.retcode != self.mt5.TRADE_RETCODE_DONE:
