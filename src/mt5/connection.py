@@ -24,7 +24,7 @@ from .mt5_utils import get_mt5, is_mt5_available, is_platform_supported
 logger = structlog.get_logger(__name__)
 
 class MT5Config(BaseModel):
-    """Configuration for MT5 connection."""
+    """Configuration for MT5 connection.""" 
     server: str = Field(..., description="MT5 server address")
     login: int = Field(..., description="MT5 account login number")
     password: str = Field(..., description="MT5 account password")

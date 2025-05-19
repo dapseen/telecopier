@@ -475,18 +475,18 @@ class GoldMirror:
                             "signal_executed",
                             symbol=signal.symbol,
                             direction=signal.direction,
-                            order_id=result.order_id,
-                            simulation=result.simulation,
-                            message_id=message.get("message_id")
-                        )
+                                order_id=result.order_id,
+                                simulation=result.simulation,
+                                message_id=message.get("message_id")
+                            )
                     else:
                         logger.error(
                             "signal_execution_failed",
                             symbol=signal.symbol,
                             error=result.error,
                             simulation=result.simulation,
-                            message_id=message.get("message_id")
-                        )
+                        message_id=message.get("message_id")
+                    )
                 except Exception as e:
                     logger.error(
                         "signal_execution_error",

@@ -110,6 +110,18 @@ class TradeExecutor:
             
         async with self._lock:
             try:
+                # Log order request details
+                logger.info(
+                    "placing_order_request",
+                    symbol=request.symbol,
+                    action=request.action.name,
+                    order_type=request.order_type.name,
+                    volume=request.volume,
+                    price=request.price,
+                    stop_loss=request.stop_loss,
+                    take_profit=request.take_profit
+                )
+                
                 # Check risk limits before placing order
                 compliant, reason = await self.position_manager.check_risk_limits()
                 if not compliant:
@@ -140,6 +152,14 @@ class TradeExecutor:
                 order_type = request.order_type.value
                 if request.order_type == OrderType.MARKET:
                     order_type = request.action.value
+                    logger.info(
+                        "market_order_type_set",
+                        original_type=request.order_type.name,
+                        action=request.action.name,
+                        final_type=order_type,
+                        mt5_buy=mt5.ORDER_TYPE_BUY,
+                        mt5_sell=mt5.ORDER_TYPE_SELL
+                    )
                     
                 request_dict = {
                     "action": mt5.TRADE_ACTION_DEAL if request.order_type == OrderType.MARKET
@@ -157,6 +177,18 @@ class TradeExecutor:
                     "type_filling": mt5.ORDER_FILLING_FOK,
                 }
                 
+                # Log final request details
+                logger.info(
+                    "order_request_details",
+                    action=request_dict["action"],
+                    type=request_dict["type"],
+                    is_market=request.order_type == OrderType.MARKET,
+                    is_buy=request_dict["type"] == mt5.ORDER_TYPE_BUY,
+                    is_sell=request_dict["type"] == mt5.ORDER_TYPE_SELL,
+                    price=request_dict["price"],
+                    volume=request_dict["volume"]
+                )
+                
                 if request.expiration:
                     request_dict["type_time"] = mt5.ORDER_TIME_SPECIFIED
                     request_dict["expiration"] = int(request.expiration.timestamp())
@@ -168,7 +200,10 @@ class TradeExecutor:
                         "order_placement_failed",
                         retcode=result.retcode,
                         comment=result.comment,
-                        request=request_dict
+                        request=request_dict,
+                        order_type=request_dict["type"],
+                        is_buy=request_dict["type"] == mt5.ORDER_TYPE_BUY,
+                        is_sell=request_dict["type"] == mt5.ORDER_TYPE_SELL
                     )
                     return None
                     
@@ -178,7 +213,11 @@ class TradeExecutor:
                     order_id=order_id,
                     symbol=request.symbol,
                     action=request.action.name,
-                    volume=request.volume
+                    order_type=request_dict["type"],
+                    is_buy=request_dict["type"] == mt5.ORDER_TYPE_BUY,
+                    is_sell=request_dict["type"] == mt5.ORDER_TYPE_SELL,
+                    volume=request.volume,
+                    price=result.price
                 )
                 
                 # Store order information

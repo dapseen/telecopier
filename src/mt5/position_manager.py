@@ -349,58 +349,80 @@ class PositionManager:
                     risk_amount=risk_amount,
                     stop_loss_pips=stop_loss_pips
                 )
+                
+                # Check risk limits before returning
+                if len(self._positions) >= self.risk_config.max_open_trades:
+                    logger.warning(
+                        "max_open_trades_reached",
+                        current=len(self._positions),
+                        max=self.risk_config.max_open_trades
+                    )
+                    return None
+                    
+                # Check symbol risk exposure
+                symbol_risk = self._calculate_symbol_risk(symbol)
+                if symbol_risk >= self.risk_config.max_symbol_risk:
+                    logger.warning(
+                        "max_symbol_risk_reached",
+                        symbol=symbol,
+                        current_risk=symbol_risk,
+                        max_risk=self.risk_config.max_symbol_risk
+                    )
+                    return None
+                
+                return position_size
             else:
-                # Original calculation for other symbols
+                # Calculate position size for other symbols
                 price_risk = abs(entry_price - stop_loss)
-            if price_risk == 0:
-                logger.error(
-                    "invalid_price_risk",
-                    entry_price=entry_price,
-                    stop_loss=stop_loss
-                )
-                return None
+                if price_risk == 0:
+                    logger.error(
+                        "invalid_price_risk",
+                        entry_price=entry_price,
+                        stop_loss=stop_loss
+                    )
+                    return None
+                    
+                tick_value = symbol_info.trade_tick_value
+                point = symbol_info.point
+                monetary_risk_per_point = risk_amount / price_risk
+                position_size = monetary_risk_per_point / (tick_value * point)
                 
-            tick_value = symbol_info.trade_tick_value
-            point = symbol_info.point
-            monetary_risk_per_point = risk_amount / price_risk
-            position_size = monetary_risk_per_point / (tick_value * point)
-            
-            # Adjust to symbol lot step
-            position_size = round(
-                position_size / symbol_info.volume_step
-            ) * symbol_info.volume_step
-            
-            # Validate against symbol limits
-            position_size = min(
-                position_size,
-                symbol_info.volume_max
-            )
-            position_size = max(
-                position_size,
-                symbol_info.volume_min
-            )
-            
-            # Check against max open trades
-            if len(self._positions) >= self.risk_config.max_open_trades:
-                logger.warning(
-                    "max_open_trades_reached",
-                    current=len(self._positions),
-                    max=self.risk_config.max_open_trades
-                )
-                return None
+                # Adjust to symbol lot step
+                position_size = round(
+                    position_size / symbol_info.volume_step
+                ) * symbol_info.volume_step
                 
-            # Check symbol risk exposure
-            symbol_risk = self._calculate_symbol_risk(symbol)
-            if symbol_risk >= self.risk_config.max_symbol_risk:
-                logger.warning(
-                    "max_symbol_risk_reached",
-                    symbol=symbol,
-                    current_risk=symbol_risk,
-                    max_risk=self.risk_config.max_symbol_risk
+                # Validate against symbol limits
+                position_size = min(
+                    position_size,
+                    symbol_info.volume_max
                 )
-                return None
+                position_size = max(
+                    position_size,
+                    symbol_info.volume_min
+                )
                 
-            return position_size
+                # Check risk limits before returning
+                if len(self._positions) >= self.risk_config.max_open_trades:
+                    logger.warning(
+                        "max_open_trades_reached",
+                        current=len(self._positions),
+                        max=self.risk_config.max_open_trades
+                    )
+                    return None
+                    
+                # Check symbol risk exposure
+                symbol_risk = self._calculate_symbol_risk(symbol)
+                if symbol_risk >= self.risk_config.max_symbol_risk:
+                    logger.warning(
+                        "max_symbol_risk_reached",
+                        symbol=symbol,
+                        current_risk=symbol_risk,
+                        max_risk=self.risk_config.max_symbol_risk
+                    )
+                    return None
+                
+                return position_size
             
         except Exception as e:
             logger.error(
