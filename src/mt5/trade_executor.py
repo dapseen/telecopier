@@ -259,69 +259,127 @@ class TradeExecutor:
             return False
             
         async with self._lock:
-            try:
-                # Get current order info
-                order = mt5.orders_get(ticket=modification.order_id)
-                if not order:
-                    logger.error(
-                        "order_not_found",
-                        order_id=modification.order_id
-                    )
-                    return False
+            max_attempts = 3
+            attempt = 0
+            
+            while attempt < max_attempts:
+                try:
+                    attempt += 1
+                    # Get current order info
+                    position = mt5.positions_get(ticket=modification.order_id)
+                    if not position:
+                        logger.error(
+                            "order_not_found",
+                            order_id=modification.order_id,
+                            attempt=attempt
+                        )
+                        return False
+                        
+                    position = position[0]
                     
-                order = order[0]
-                
-                # Prepare modification request
-                request = {
-                    "action": mt5.TRADE_ACTION_MODIFY,
-                    "ticket": modification.order_id,
-                    "price": modification.price if modification.price else order.price_open,
-                    "sl": modification.stop_loss if modification.stop_loss else order.sl,
-                    "tp": modification.take_profit if modification.take_profit else order.tp,
-                    "type_time": mt5.ORDER_TIME_GTC,
-                }
-                
-                if modification.expiration:
-                    request["type_time"] = mt5.ORDER_TIME_SPECIFIED
-                    request["expiration"] = int(modification.expiration.timestamp())
+                    # Prepare modification request
+                    request = {
+                        "action": mt5.TRADE_ACTION_MODIFY,
+                        "ticket": modification.order_id,
+                        "price": modification.price if modification.price else position.price_open,
+                        "sl": modification.stop_loss if modification.stop_loss else position.sl,
+                        "tp": modification.take_profit if modification.take_profit else position.tp,
+                        "type_time": mt5.ORDER_TIME_GTC,
+                    }
                     
-                # Send modification request
-                result = mt5.order_send(request)
-                if result.retcode != mt5.TRADE_RETCODE_DONE:
-                    logger.error(
-                        "order_modification_failed",
-                        retcode=result.retcode,
-                        comment=result.comment,
+                    if modification.expiration:
+                        request["type_time"] = mt5.ORDER_TIME_SPECIFIED
+                        request["expiration"] = int(modification.expiration.timestamp())
+                        
+                    # Log modification attempt
+                    logger.info(
+                        "modifying_order",
+                        order_id=modification.order_id,
+                        attempt=attempt,
+                        max_attempts=max_attempts,
                         request=request
                     )
+                    
+                    # Send modification request
+                    result = mt5.order_send(request)
+                    
+                    # Check if result is None (connection issue)
+                    if result is None:
+                        logger.error(
+                            "order_modification_failed_null_result",
+                            order_id=modification.order_id,
+                            attempt=attempt
+                        )
+                        await asyncio.sleep(1)  # Wait before retry
+                        continue
+                        
+                    # Check result code
+                    if result.retcode != mt5.TRADE_RETCODE_DONE:
+                        logger.error(
+                            "order_modification_failed",
+                            retcode=result.retcode,
+                            comment=result.comment,
+                            request=request,
+                            attempt=attempt
+                        )
+                        
+                        # If it's a retryable error, wait and try again
+                        if result.retcode in [
+                            mt5.TRADE_RETCODE_REQUOTE,
+                            mt5.TRADE_RETCODE_REJECT,
+                            mt5.TRADE_RETCODE_CANCEL,
+                            mt5.TRADE_RETCODE_PLACED,
+                            mt5.TRADE_RETCODE_DONE_PARTIAL,
+                            mt5.TRADE_RETCODE_ERROR,
+                            mt5.TRADE_RETCODE_TIMEOUT,
+                            mt5.TRADE_RETCODE_INVALID,
+                            mt5.TRADE_RETCODE_INVALID_VOLUME,
+                            mt5.TRADE_RETCODE_INVALID_PRICE,
+                            mt5.TRADE_RETCODE_INVALID_STOPS
+                        ]:
+                            await asyncio.sleep(1)  # Wait before retry
+                            continue
+                            
+                        return False
+                        
+                    # Update stored order info
+                    if modification.order_id in self._active_orders:
+                        self._active_orders[modification.order_id].update({
+                            "price": result.price,
+                            "sl": result.sl,
+                            "tp": result.tp
+                        })
+                        
+                    # Update position manager
+                    await self.position_manager.update_positions()
+                        
+                    logger.info(
+                        "order_modified",
+                        order_id=modification.order_id,
+                        changes=request,
+                        attempt=attempt
+                    )
+                    
+                    return True
+                    
+                except Exception as e:
+                    logger.error(
+                        "order_modification_error",
+                        error=str(e),
+                        order_id=modification.order_id,
+                        attempt=attempt
+                    )
+                    if attempt < max_attempts:
+                        await asyncio.sleep(1)  # Wait before retry
+                        continue
                     return False
                     
-                # Update stored order info
-                if modification.order_id in self._active_orders:
-                    self._active_orders[modification.order_id].update({
-                        "price": result.price,
-                        "sl": result.sl,
-                        "tp": result.tp
-                    })
-                    
-                # Update position manager
-                await self.position_manager.update_positions()
-                    
-                logger.info(
-                    "order_modified",
-                    order_id=modification.order_id,
-                    changes=request
-                )
-                
-                return True
-                
-            except Exception as e:
-                logger.error(
-                    "order_modification_error",
-                    error=str(e),
-                    order_id=modification.order_id
-                )
-                return False
+            logger.error(
+                "order_modification_max_attempts_reached",
+                order_id=modification.order_id,
+                max_attempts=max_attempts
+            )
+            return False
                 
     async def close_order(self, order_id: int, volume: Optional[float] = None) -> bool:
         """Close an existing order with position tracking.

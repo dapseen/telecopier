@@ -19,7 +19,7 @@ class RiskParameters:
     """Risk parameters for trading account management.
     
     Attributes:
-        risk_per_trade_pct: Percentage of account balance to risk per trade
+        risk_per_trade_pct: Percentage of account balance to risk per trade (e.g., 0.25 for 0.25%)
         max_position_size_pct: Maximum position size as percentage of account balance
         max_open_positions: Maximum number of open positions allowed
         max_daily_loss_pct: Maximum daily loss as percentage of account balance
@@ -28,7 +28,7 @@ class RiskParameters:
         cooldown_after_loss: Seconds to wait after a loss before trading again
         max_slippage: Maximum allowed slippage in points
     """
-    risk_per_trade_pct: Decimal
+    risk_per_trade_pct: Decimal  # Stored as decimal (e.g., 0.0025 for 0.25%)
     max_position_size_pct: Decimal
     max_open_positions: int
     max_daily_loss_pct: Decimal
@@ -36,6 +36,16 @@ class RiskParameters:
     min_account_balance: Decimal
     cooldown_after_loss: int
     max_slippage: int
+
+    def __post_init__(self):
+        """Validate and normalize risk parameters after initialization."""
+        # Convert percentage values to decimal form if they're not already
+        if self.risk_per_trade_pct > 1:
+            self.risk_per_trade_pct = self.risk_per_trade_pct / 100
+        if self.max_position_size_pct > 1:
+            self.max_position_size_pct = self.max_position_size_pct / 100
+        if self.max_daily_loss_pct > 1:
+            self.max_daily_loss_pct = self.max_daily_loss_pct / 100
 
 class RiskManager:
     """Manages trading risk and position sizing.
@@ -170,22 +180,54 @@ class RiskManager:
                 
             # Calculate risk amount if not provided
             if risk_amount is None:
+                # Convert risk_per_trade_pct to actual amount
                 risk_amount = Decimal(str(account_info.balance)) * self.risk_params.risk_per_trade_pct
+                logger.info(
+                    "risk_amount_calculated",
+                    account_balance=account_info.balance,
+                    risk_per_trade_pct=float(self.risk_params.risk_per_trade_pct * 100),
+                    risk_amount=float(risk_amount)
+                )
                 
             # Calculate position size based on risk
             price_risk = abs(entry_price - stop_loss)
             if price_risk == 0:
                 return Decimal("0"), "Invalid price risk (entry price equals stop loss)"
                 
-            position_size = risk_amount / price_risk
+            # Calculate position size in lots
+            tick_value = Decimal(str(symbol_info.trade_tick_value))
+            tick_size = Decimal(str(symbol_info.trade_tick_size))
+            contract_size = Decimal(str(symbol_info.trade_contract_size))
             
-            # Convert to lots and apply maximum position size limit
+            # Convert price risk to pips/points
+            price_risk_points = price_risk / tick_size
+            
+            # Calculate position size
+            position_size = (risk_amount / (price_risk_points * tick_value)) / contract_size
+            
+            # Apply maximum position size limit
             max_position_size = Decimal(str(account_info.balance)) * self.risk_params.max_position_size_pct
-            position_size = min(position_size, max_position_size)
+            max_position_lots = max_position_size / (contract_size * entry_price)
+            position_size = min(position_size, max_position_lots)
             
             # Round to symbol's lot step
             lot_step = Decimal(str(symbol_info.volume_step))
             position_size = (position_size / lot_step).quantize(Decimal("1")) * lot_step
+            
+            # Ensure position size is within allowed limits
+            if position_size < symbol_info.volume_min:
+                return Decimal("0"), f"Calculated position size {position_size} below minimum {symbol_info.volume_min}"
+            if position_size > symbol_info.volume_max:
+                position_size = Decimal(str(symbol_info.volume_max))
+                
+            logger.info(
+                "position_size_calculated",
+                symbol=symbol,
+                risk_amount=float(risk_amount),
+                price_risk=float(price_risk),
+                position_size=float(position_size),
+                max_position_size=float(max_position_lots)
+            )
             
             return position_size, ""
             
