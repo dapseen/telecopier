@@ -517,36 +517,75 @@ class MT5Connection:
                 
             # Get current price and format it according to symbol digits
             digits = symbol_info.digits
+            current_ask = self.mt5.symbol_info_tick(symbol).ask
+            current_bid = self.mt5.symbol_info_tick(symbol).bid
             
             # For market orders, we don't specify a price
             if order_type == "MARKET":
                 current_price = None
                 formatted_price = None
+                entry_price = current_ask if direction == "BUY" else current_bid
             else:
-                current_price = price if price else self.mt5.symbol_info_tick(symbol).ask
+                current_price = price if price else current_ask
                 formatted_price = round(current_price, digits)
+                entry_price = formatted_price
             
             # Format stop loss and take profit
             formatted_sl = round(stop_loss, digits) if stop_loss else None
             formatted_tp = round(take_profit, digits) if take_profit else None
+            
+            # Calculate stop distances
+            if formatted_sl:
+                if direction == "BUY":
+                    sl_distance = entry_price - formatted_sl
+                else:
+                    sl_distance = formatted_sl - entry_price
+                    
+                # Convert to points
+                sl_distance_points = sl_distance / symbol_info.point
+                
+                # Log detailed stop loss validation
+                logger.info(
+                    "stop_loss_validation",
+                    symbol=symbol,
+                    direction=direction,
+                    order_type=order_type,
+                    entry_price=entry_price,
+                    stop_loss=formatted_sl,
+                    distance_points=sl_distance_points,
+                    min_required_points=symbol_info.trade_stops_level,
+                    point_value=symbol_info.point,
+                    current_ask=current_ask,
+                    current_bid=current_bid,
+                    is_valid=sl_distance_points >= symbol_info.trade_stops_level
+                )
+                
+                # Validate stop loss distance
+                if sl_distance_points < symbol_info.trade_stops_level:
+                    return {
+                        "success": False,
+                        "error": f"Stop loss too close to entry price. Minimum distance required: {symbol_info.trade_stops_level} points"
+                    }
             
             # Log price formatting details
             logger.info(
                 "price_formatting_details",
                 symbol=symbol,
                 order_type=order_type,
+                direction=direction,
                 original_price=price,
                 original_sl=stop_loss,
                 original_tp=take_profit,
-                current_ask=self.mt5.symbol_info_tick(symbol).ask if order_type == "MARKET" else None,
+                current_ask=current_ask,
+                current_bid=current_bid,
+                entry_price=entry_price,
                 formatted_price=formatted_price,
                 formatted_sl=formatted_sl,
                 formatted_tp=formatted_tp,
                 digits=digits,
                 point=symbol_info.point,
                 trade_stops_level=symbol_info.trade_stops_level,
-                min_stop_distance=symbol_info.trade_stops_level * symbol_info.point,
-                actual_stop_distance=abs(self.mt5.symbol_info_tick(symbol).ask - formatted_sl) if formatted_sl and order_type == "MARKET" else None
+                min_stop_distance=symbol_info.trade_stops_level * symbol_info.point
             )
                 
             # Prepare order request
