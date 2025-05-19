@@ -351,7 +351,7 @@ class PositionManager:
                 )
             else:
                 # Original calculation for other symbols
-            price_risk = abs(entry_price - stop_loss)
+                price_risk = abs(entry_price - stop_loss)
             if price_risk == 0:
                 logger.error(
                     "invalid_price_risk",
@@ -361,9 +361,9 @@ class PositionManager:
                 return None
                 
             tick_value = symbol_info.trade_tick_value
-                point = symbol_info.point
-                monetary_risk_per_point = risk_amount / price_risk
-                position_size = monetary_risk_per_point / (tick_value * point)
+            point = symbol_info.point
+            monetary_risk_per_point = risk_amount / price_risk
+            position_size = monetary_risk_per_point / (tick_value * point)
             
             # Adjust to symbol lot step
             position_size = round(

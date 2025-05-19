@@ -99,13 +99,13 @@ class TradeExecutor:
                     
                 # Calculate position size
                 try:
-                position_size = await self._calculate_position_size(signal)
-                if not position_size:
-                    return TradeResult(
-                        success=False,
-                        error="Failed to calculate position size",
-                        simulation=self.simulation_mode
-                        )
+                    position_size = await self._calculate_position_size(signal)
+                    if not position_size:
+                        return TradeResult(
+                            success=False,
+                            error="Failed to calculate position size",
+                            simulation=self.simulation_mode
+                            )
                 except Exception as e:
                     logger.error(
                         "position_size_calculation_error",
@@ -247,7 +247,7 @@ class TradeExecutor:
                     symbol=signal.symbol,
                     direction=signal.direction
                 )
-                    return False
+                return False
                     
             # Validate take profit levels
             if not signal.take_profits:

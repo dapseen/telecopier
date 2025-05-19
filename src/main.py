@@ -471,10 +471,10 @@ class GoldMirror:
                 try:
                     result = await self.trade_executor.execute_signal(signal)
                     if result.success:
-                    logger.info(
-                        "signal_executed",
-                        symbol=signal.symbol,
-                        direction=signal.direction,
+                        logger.info(
+                            "signal_executed",
+                            symbol=signal.symbol,
+                            direction=signal.direction,
                             order_id=result.order_id,
                             simulation=result.simulation,
                             message_id=message.get("message_id")
@@ -485,8 +485,8 @@ class GoldMirror:
                             symbol=signal.symbol,
                             error=result.error,
                             simulation=result.simulation,
-                        message_id=message.get("message_id")
-                    )
+                            message_id=message.get("message_id")
+                        )
                 except Exception as e:
                     logger.error(
                         "signal_execution_error",
