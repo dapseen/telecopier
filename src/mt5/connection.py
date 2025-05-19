@@ -520,10 +520,11 @@ class MT5Connection:
             current_ask = self.mt5.symbol_info_tick(symbol).ask
             current_bid = self.mt5.symbol_info_tick(symbol).bid
             
-            # For market orders, we don't specify a price
+            # For market orders, we use current ask for buy and current bid for sell
             if order_type == "MARKET":
                 current_price = None
                 formatted_price = None
+                # For buy orders, use ask price; for sell orders, use bid price
                 entry_price = current_ask if direction == "BUY" else current_bid
             else:
                 current_price = price if price else current_ask
@@ -536,13 +537,15 @@ class MT5Connection:
             
             # Calculate stop distances
             if formatted_sl:
+                # For buy orders: entry_price (ask) - stop_loss
+                # For sell orders: stop_loss - entry_price (bid)
                 if direction == "BUY":
-                    sl_distance = entry_price - formatted_sl
+                    price_difference = entry_price - formatted_sl
                 else:
-                    sl_distance = formatted_sl - entry_price
+                    price_difference = formatted_sl - entry_price
                     
-                # Convert to points
-                sl_distance_points = sl_distance / symbol_info.point
+                # Convert price difference to points (1 point = symbol_info.point)
+                sl_distance_points = int(price_difference / symbol_info.point)
                 
                 # Log detailed stop loss validation
                 logger.info(
@@ -552,7 +555,8 @@ class MT5Connection:
                     order_type=order_type,
                     entry_price=entry_price,
                     stop_loss=formatted_sl,
-                    distance_points=sl_distance_points,
+                    price_difference=price_difference,
+                    points=sl_distance_points,
                     min_required_points=symbol_info.trade_stops_level,
                     point_value=symbol_info.point,
                     current_ask=current_ask,
@@ -564,7 +568,7 @@ class MT5Connection:
                 if sl_distance_points < symbol_info.trade_stops_level:
                     return {
                         "success": False,
-                        "error": f"Stop loss too close to entry price. Minimum distance required: {symbol_info.trade_stops_level} points"
+                        "error": f"Stop loss too close to entry price. Required: {symbol_info.trade_stops_level} points, Got: {sl_distance_points} points (price difference: {price_difference:.2f})"
                     }
             
             # Log price formatting details
