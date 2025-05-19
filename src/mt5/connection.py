@@ -520,12 +520,28 @@ class MT5Connection:
             current_ask = self.mt5.symbol_info_tick(symbol).ask
             current_bid = self.mt5.symbol_info_tick(symbol).bid
             
+            # Log current market prices
+            logger.info(
+                "current_market_prices",
+                symbol=symbol,
+                ask=current_ask,
+                bid=current_bid,
+                direction=direction.upper()
+            )
+            
             # For market orders, we use current ask for buy and current bid for sell
             if order_type == "MARKET":
                 current_price = None
                 formatted_price = None
-                # For buy orders, use ask price; for sell orders, use bid price
-                entry_price = current_ask if direction == "BUY" else current_bid
+                # For buy orders, ALWAYS use ask price; for sell orders, ALWAYS use bid price
+                entry_price = current_ask if direction.upper() == "BUY" else current_bid
+                logger.info(
+                    "market_order_entry_price",
+                    symbol=symbol,
+                    direction=direction.upper(),
+                    entry_price=entry_price,
+                    price_type="ASK" if direction.upper() == "BUY" else "BID"
+                )
             else:
                 current_price = price if price else current_ask
                 formatted_price = round(current_price, digits)
@@ -537,12 +553,17 @@ class MT5Connection:
             
             # Calculate stop distances
             if formatted_sl:
-                # For buy orders: entry_price (ask) - stop_loss
-                # For sell orders: stop_loss - entry_price (bid)
-                if direction == "BUY":
-                    price_difference = entry_price - formatted_sl
+                # Always use the correct price for calculations:
+                # For buy orders: current_ask - stop_loss
+                # For sell orders: stop_loss - current_bid
+                if direction.upper() == "BUY":
+                    price_difference = current_ask - formatted_sl  # Always use ask for buy orders
+                    price_used = current_ask
+                    price_type = "ASK"
                 else:
-                    price_difference = formatted_sl - entry_price
+                    price_difference = formatted_sl - current_bid  # Always use bid for sell orders
+                    price_used = current_bid
+                    price_type = "BID"
                     
                 # Convert price difference to points (1 point = symbol_info.point)
                 sl_distance_points = int(price_difference / symbol_info.point)
@@ -551,16 +572,17 @@ class MT5Connection:
                 logger.info(
                     "stop_loss_validation",
                     symbol=symbol,
-                    direction=direction,
+                    direction=direction.upper(),
                     order_type=order_type,
-                    entry_price=entry_price,
+                    current_ask=current_ask,
+                    current_bid=current_bid,
+                    price_used=price_used,
+                    price_type=price_type,
                     stop_loss=formatted_sl,
                     price_difference=price_difference,
                     points=sl_distance_points,
                     min_required_points=symbol_info.trade_stops_level,
                     point_value=symbol_info.point,
-                    current_ask=current_ask,
-                    current_bid=current_bid,
                     is_valid=sl_distance_points >= symbol_info.trade_stops_level
                 )
                 
@@ -628,7 +650,7 @@ class MT5Connection:
             # Send order
             result = self.mt5.order_send(request)
             
-            # Log the result
+            # Log the result with execution price verification
             logger.info(
                 "order_send_result",
                 symbol=symbol,
@@ -636,9 +658,13 @@ class MT5Connection:
                 comment=result.comment,
                 order_id=result.order,
                 volume=result.volume,
-                price=result.price,
-                request_sl=request["sl"],
-                request_tp=request["tp"]
+                execution_price=result.price,
+                expected_price=current_ask if direction.upper() == "BUY" else current_bid,
+                price_type="ASK" if direction.upper() == "BUY" else "BID",
+                request_sl=request.get("sl"),
+                request_tp=request.get("tp"),
+                price_difference=abs(result.price - (current_ask if direction.upper() == "BUY" else current_bid)),
+                deviation_points=int(abs(result.price - (current_ask if direction.upper() == "BUY" else current_bid)) / symbol_info.point)
             )
             
             if result.retcode != self.mt5.TRADE_RETCODE_DONE:

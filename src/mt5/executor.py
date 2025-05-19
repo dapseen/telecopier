@@ -437,16 +437,31 @@ class TradeExecutor:
             TradeResult containing execution results
         """
         try:
-            # Place the order
-            order_result = await self.connection.place_order(
+            # For market orders, we don't specify an entry price
+            # MT5 will use current ask price for buy orders and bid price for sell orders
+            order_params = {
+                "symbol": signal.symbol,
+                "order_type": "MARKET",
+                "direction": signal.direction,
+                "volume": position_size,
+                "stop_loss": signal.stop_loss,
+                "take_profit": signal.take_profits[0].price if signal.take_profits else None,
+                "comment": f"Signal Entry: {signal.entry_price}"  # Store intended entry in comment
+            }
+            
+            # Log order parameters
+            logger.info(
+                "placing_market_order",
                 symbol=signal.symbol,
-                order_type="MARKET",
                 direction=signal.direction,
-                volume=position_size,
-                price=signal.entry_price,
+                intended_entry=signal.entry_price,
                 stop_loss=signal.stop_loss,
-                take_profit=signal.take_profits[0].price if signal.take_profits else None
+                take_profit=order_params["take_profit"],
+                volume=position_size
             )
+            
+            # Place the order
+            order_result = await self.connection.place_order(**order_params)
             
             # Handle dictionary response from place_order
             if not isinstance(order_result, dict):
@@ -471,12 +486,22 @@ class TradeExecutor:
                     simulation=False
                 )
                 
-            # Record the trade
+            # Get the actual execution price from MT5
+            actual_price = order_result.get("price")
+            if not actual_price:
+                logger.warning(
+                    "no_execution_price",
+                    symbol=signal.symbol,
+                    order_id=order_id
+                )
+                
+            # Record the trade with actual execution price
             self._active_trades[signal.symbol] = {
                 "order_id": order_id,
                 "symbol": signal.symbol,
                 "direction": signal.direction,
-                "entry_price": signal.entry_price,
+                "intended_entry": signal.entry_price,  # Store intended entry
+                "actual_entry": actual_price,  # Store actual execution price
                 "stop_loss": signal.stop_loss,
                 "take_profits": signal.take_profits,
                 "position_size": position_size,
@@ -488,7 +513,8 @@ class TradeExecutor:
                 "trade_executed",
                 symbol=signal.symbol,
                 direction=signal.direction,
-                entry=signal.entry_price,
+                intended_entry=signal.entry_price,
+                actual_entry=actual_price,
                 sl=signal.stop_loss,
                 tp=[tp.price for tp in signal.take_profits],
                 size=position_size,
