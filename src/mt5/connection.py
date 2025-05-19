@@ -599,21 +599,46 @@ class MT5Connection:
                     
                 # Step 2: Modify order to add SL/TP with retry logic
                 if formatted_sl or formatted_tp:
-                    # Get the position
-                    position = self.mt5.positions_get(ticket=result.order)
-                    if not position:
+                    # Get the position and verify it exists
+                    positions = self.mt5.positions_get(ticket=result.order)
+                    if not positions:
+                        logger.error(
+                            "position_not_found_after_order",
+                            symbol=symbol,
+                            order_id=result.order,
+                            retcode=result.retcode,
+                            price=result.price
+                        )
                         return {
                             "success": False,
-                            "error": "Position not found after order placement"
+                            "error": "Position not found after order placement",
+                            "order_id": result.order,
+                            "initial_price": result.price
                         }
                         
-                    position = position[0]
+                    position = positions[0]
+                    
+                    # Verify position details
+                    logger.info(
+                        "position_details_before_modification",
+                        symbol=symbol,
+                        order_id=result.order,
+                        ticket=position.ticket,
+                        type=position.type,
+                        volume=position.volume,
+                        price_open=position.price_open,
+                        sl=position.sl,
+                        tp=position.tp,
+                        profit=position.profit,
+                        swap=position.swap,
+                        time=position.time
+                    )
                     
                     # Prepare modification request
                     modify_request = {
                         "action": self.mt5.TRADE_ACTION_SLTP,
                         "symbol": symbol,
-                        "position": result.order,
+                        "position": position.ticket,  # Use position.ticket instead of result.order
                         "sl": formatted_sl,
                         "tp": formatted_tp
                     }
@@ -628,12 +653,15 @@ class MT5Connection:
                             "modifying_order_with_sl_tp_attempt",
                             symbol=symbol,
                             order_id=result.order,
+                            position_ticket=position.ticket,
                             attempt=attempt + 1,
                             max_attempts=max_modify_retries,
                             request=modify_request,
-                            current_price=position.price,
+                            current_price_open=position.price_open,
                             current_sl=position.sl,
-                            current_tp=position.tp
+                            current_tp=position.tp,
+                            current_profit=position.profit,
+                            current_volume=position.volume
                         )
                         
                         # Send modification request
@@ -646,13 +674,31 @@ class MT5Connection:
                             retcode=modify_result.retcode,
                             comment=modify_result.comment,
                             order_id=result.order,
+                            position_ticket=position.ticket,
                             attempt=attempt + 1,
                             requested_sl=formatted_sl,
-                            requested_tp=formatted_tp
+                            requested_tp=formatted_tp,
+                            current_price_open=position.price_open,
+                            current_sl=position.sl,
+                            current_tp=position.tp
                         )
                         
                         if modify_result.retcode == self.mt5.TRADE_RETCODE_DONE:
                             modify_success = True
+                            # Verify the modification
+                            updated_positions = self.mt5.positions_get(ticket=position.ticket)
+                            if updated_positions:
+                                updated_position = updated_positions[0]
+                                logger.info(
+                                    "position_after_modification",
+                                    symbol=symbol,
+                                    order_id=result.order,
+                                    position_ticket=position.ticket,
+                                    new_sl=updated_position.sl,
+                                    new_tp=updated_position.tp,
+                                    price_open=updated_position.price_open,
+                                    profit=updated_position.profit
+                                )
                             break
                             
                         last_error = f"Modification attempt {attempt + 1} failed: {modify_result.comment} (code: {modify_result.retcode})"
@@ -662,32 +708,64 @@ class MT5Connection:
                             await asyncio.sleep(modify_retry_delay)
                             
                             # Refresh position info before retry
-                            position = self.mt5.positions_get(ticket=result.order)
-                            if position:
-                                position = position[0]
+                            updated_positions = self.mt5.positions_get(ticket=position.ticket)
+                            if updated_positions:
+                                position = updated_positions[0]
                                 logger.info(
                                     "refreshed_position_before_retry",
                                     symbol=symbol,
                                     order_id=result.order,
+                                    position_ticket=position.ticket,
                                     attempt=attempt + 2,
-                                    current_price=position.price,
+                                    current_price_open=position.price_open,
                                     current_sl=position.sl,
-                                    current_tp=position.tp
+                                    current_tp=position.tp,
+                                    current_profit=position.profit,
+                                    current_volume=position.volume
                                 )
+                            else:
+                                logger.error(
+                                    "position_not_found_during_retry",
+                                    symbol=symbol,
+                                    order_id=result.order,
+                                    position_ticket=position.ticket,
+                                    attempt=attempt + 2
+                                )
+                                return {
+                                    "success": False,
+                                    "error": "Position not found during modification retry",
+                                    "order_id": result.order,
+                                    "position_ticket": position.ticket
+                                }
                     
                     if not modify_success:
                         return {
                             "success": False,
                             "error": last_error,
-                            "order_id": result.order,  # Still return order_id even if modification failed
-                            "modification_failed": True
+                            "order_id": result.order,
+                            "position_ticket": position.ticket,
+                            "modification_failed": True,
+                            "final_position": {
+                                "price_open": position.price_open,
+                                "sl": position.sl,
+                                "tp": position.tp,
+                                "profit": position.profit
+                            }
                         }
                 
                 return {
                     "success": True,
                     "order_id": result.order,
+                    "position_ticket": position.ticket if formatted_sl or formatted_tp else None,
                     "price": result.price,
-                    "modification_success": formatted_sl is not None or formatted_tp is not None
+                    "modification_success": formatted_sl is not None or formatted_tp is not None,
+                    "position_details": {
+                        "price_open": position.price_open,
+                        "sl": position.sl,
+                        "tp": position.tp,
+                        "profit": position.profit,
+                        "volume": position.volume
+                    } if formatted_sl or formatted_tp else None
                 }
             else:
                 # For pending orders, proceed as before

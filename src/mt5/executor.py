@@ -99,12 +99,12 @@ class TradeExecutor:
                     
                 # Calculate position size
                 try:
-                    position_size = await self._calculate_position_size(signal)
-                    if not position_size:
-                        return TradeResult(
-                            success=False,
-                            error="Failed to calculate position size",
-                            simulation=self.simulation_mode
+                position_size = await self._calculate_position_size(signal)
+                if not position_size:
+                    return TradeResult(
+                        success=False,
+                        error="Failed to calculate position size",
+                        simulation=self.simulation_mode
                         )
                 except Exception as e:
                     logger.error(
@@ -126,7 +126,7 @@ class TradeExecutor:
                     size=position_size,
                     entry=signal.entry_price,
                     sl=signal.stop_loss
-                )
+                    )
                     
                 if self.simulation_mode:
                     # Simulate trade execution
@@ -247,7 +247,7 @@ class TradeExecutor:
                     symbol=signal.symbol,
                     direction=signal.direction
                 )
-                return False
+                    return False
                     
             # Validate take profit levels
             if not signal.take_profits:
@@ -362,7 +362,7 @@ class TradeExecutor:
                     symbol=signal.symbol
                 )
                 return None
-                
+            
         except Exception as e:
             logger.error(
                 "position_size_calculation_failed",
@@ -469,8 +469,8 @@ class TradeExecutor:
                     success=False,
                     error="Invalid order result format",
                     simulation=False
-                )
-                
+            )
+            
             if not order_result.get("success", False):
                 return TradeResult(
                     success=False,

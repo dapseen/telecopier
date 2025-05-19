@@ -143,7 +143,7 @@ class SignalParser:
             
             # Extract basic signal components
             try:
-                symbol, direction = self._extract_symbol_and_direction(message)
+            symbol, direction = self._extract_symbol_and_direction(message)
                 logger.debug(
                     "Extracted symbol and direction: %s %s (pattern: %s)",
                     symbol,
@@ -160,7 +160,7 @@ class SignalParser:
                 return None
                 
             try:
-                entry_price = self._extract_entry_price(message)
+            entry_price = self._extract_entry_price(message)
                 logger.debug(
                     "Extracted entry price: %s (pattern: %s)",
                     entry_price,
@@ -176,7 +176,7 @@ class SignalParser:
                 return None
                 
             try:
-                stop_loss, sl_pips = self._extract_stop_loss(message)
+            stop_loss, sl_pips = self._extract_stop_loss(message)
                 logger.debug(
                     "Extracted stop loss: %s (pips: %s) (pattern: %s)",
                     stop_loss,
@@ -193,7 +193,7 @@ class SignalParser:
                 return None
                 
             try:
-                take_profits = self._extract_take_profits(message)
+            take_profits = self._extract_take_profits(message)
                 logger.debug(
                     "Extracted %d take profits: %s (pattern: %s)",
                     len(take_profits),
@@ -339,7 +339,7 @@ class SignalParser:
             self.sl_pattern.pattern,
             message[:100]
         )
-        raise ValueError("Could not find stop loss in message")
+            raise ValueError("Could not find stop loss in message")
 
     def _extract_take_profits(self, message: str) -> List[TakeProfit]:
         """Extract all take profit levels from message."""
