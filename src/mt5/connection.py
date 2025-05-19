@@ -516,11 +516,17 @@ class MT5Connection:
                 }
                 
             # Get current price and format it according to symbol digits
-            current_price = price if price else self.mt5.symbol_info_tick(symbol).ask
             digits = symbol_info.digits
             
-            # Format prices to correct number of digits
-            formatted_price = round(current_price, digits)
+            # For market orders, we don't specify a price
+            if order_type == "MARKET":
+                current_price = None
+                formatted_price = None
+            else:
+                current_price = price if price else self.mt5.symbol_info_tick(symbol).ask
+                formatted_price = round(current_price, digits)
+            
+            # Format stop loss and take profit
             formatted_sl = round(stop_loss, digits) if stop_loss else None
             formatted_tp = round(take_profit, digits) if take_profit else None
             
@@ -528,9 +534,11 @@ class MT5Connection:
             logger.info(
                 "price_formatting_details",
                 symbol=symbol,
+                order_type=order_type,
                 original_price=price,
                 original_sl=stop_loss,
                 original_tp=take_profit,
+                current_ask=self.mt5.symbol_info_tick(symbol).ask if order_type == "MARKET" else None,
                 formatted_price=formatted_price,
                 formatted_sl=formatted_sl,
                 formatted_tp=formatted_tp,
@@ -538,7 +546,7 @@ class MT5Connection:
                 point=symbol_info.point,
                 trade_stops_level=symbol_info.trade_stops_level,
                 min_stop_distance=symbol_info.trade_stops_level * symbol_info.point,
-                actual_stop_distance=abs(formatted_price - formatted_sl) if formatted_sl else None
+                actual_stop_distance=abs(self.mt5.symbol_info_tick(symbol).ask - formatted_sl) if formatted_sl and order_type == "MARKET" else None
             )
                 
             # Prepare order request
@@ -547,15 +555,22 @@ class MT5Connection:
                 "symbol": symbol,
                 "volume": volume,
                 "type": self.mt5.ORDER_TYPE_BUY if direction == "BUY" else self.mt5.ORDER_TYPE_SELL,
-                "price": formatted_price,
-                "sl": formatted_sl,
-                "tp": formatted_tp,
                 "deviation": deviation,
                 "magic": magic,
                 "comment": comment,
                 "type_time": self.mt5.ORDER_TIME_GTC,
                 "type_filling": self.mt5.ORDER_FILLING_IOC if symbol == "XAUUSD" else self.mt5.ORDER_FILLING_FOK,
             }
+            
+            # Only add price for pending orders
+            if order_type != "MARKET":
+                request["price"] = formatted_price
+                
+            # Add stop loss and take profit if specified
+            if formatted_sl:
+                request["sl"] = formatted_sl
+            if formatted_tp:
+                request["tp"] = formatted_tp
             
             # Log the final request
             logger.info(
