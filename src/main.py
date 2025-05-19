@@ -14,7 +14,7 @@ from typing import Optional, List, Dict, Any
 import structlog
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, validator
 
 from telegram import (
     SignalMonitor,
@@ -53,10 +53,132 @@ class TradingSession(BaseModel):
     timezone: str
     is_24_7: bool = False
 
+    @field_validator("start_time", "end_time")
+    @classmethod
+    def validate_time_format(cls, v: str) -> str:
+        """Validate time format (HH:MM).
+        
+        Args:
+            v: Time string to validate
+            
+        Returns:
+            str: Validated time string
+            
+        Raises:
+            ValueError: If time format is invalid
+        """
+        try:
+            hours, minutes = map(int, v.split(":"))
+            if not (0 <= hours <= 23 and 0 <= minutes <= 59):
+                raise ValueError
+        except (ValueError, AttributeError):
+            raise ValueError("Time must be in HH:MM format")
+        return v
+
+    @field_validator("symbols")
+    @classmethod
+    def validate_symbols(cls, v: List[str]) -> List[str]:
+        """Validate trading symbols.
+        
+        Args:
+            v: List of symbol strings
+            
+        Returns:
+            List[str]: Validated list of symbols
+            
+        Raises:
+            ValueError: If symbols are invalid
+        """
+        if not v:
+            raise ValueError("symbols cannot be empty")
+        if not all(isinstance(symbol, str) and symbol for symbol in v):
+            raise ValueError("symbols must be non-empty strings")
+        if len(set(v)) != len(v):
+            raise ValueError("symbols must be unique")
+        return v
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: str) -> str:
+        """Validate timezone string.
+        
+        Args:
+            v: Timezone string to validate
+            
+        Returns:
+            str: Validated timezone string
+            
+        Raises:
+            ValueError: If timezone is invalid
+        """
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(v)
+        except Exception:
+            raise ValueError(f"Invalid timezone: {v}")
+        return v
+
 class PositionConfig(BaseModel):
     """Position management configuration."""
-    breakeven: Dict[str, Any]
-    partial_close: Dict[str, Any]
+    breakeven: Dict[str, Any] = Field(
+        default_factory=lambda: {
+            "enabled": True,
+            "trigger_tp": 1,  # Move to breakeven after TP1
+            "offset": 1  # Points above entry
+        }
+    )
+    partial_close: Dict[str, Any] = Field(
+        default_factory=lambda: {
+            "enabled": True,
+            "levels": [0.25, 0.25, 0.25, 0.25]  # Split position into 4 equal parts
+        }
+    )
+
+    @field_validator("breakeven")
+    @classmethod
+    def validate_breakeven(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate breakeven configuration.
+        
+        Args:
+            v: Breakeven configuration dictionary
+            
+        Returns:
+            Dict[str, Any]: Validated breakeven configuration
+            
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        if not isinstance(v.get("enabled"), bool):
+            raise ValueError("breakeven.enabled must be a boolean")
+        if not isinstance(v.get("trigger_tp"), int) or v["trigger_tp"] < 1:
+            raise ValueError("breakeven.trigger_tp must be a positive integer")
+        if not isinstance(v.get("offset"), (int, float)) or v["offset"] < 0:
+            raise ValueError("breakeven.offset must be a non-negative number")
+        return v
+
+    @field_validator("partial_close")
+    @classmethod
+    def validate_partial_close(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate partial close configuration.
+        
+        Args:
+            v: Partial close configuration dictionary
+            
+        Returns:
+            Dict[str, Any]: Validated partial close configuration
+            
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        if not isinstance(v.get("enabled"), bool):
+            raise ValueError("partial_close.enabled must be a boolean")
+        if not isinstance(v.get("levels"), list):
+            raise ValueError("partial_close.levels must be a list")
+        if not all(isinstance(x, (int, float)) and 0 < x <= 1 for x in v["levels"]):
+            raise ValueError("partial_close.levels must be numbers between 0 and 1")
+        if abs(sum(v["levels"]) - 1.0) > 0.0001:  # Allow for floating point imprecision
+            raise ValueError("partial_close.levels must sum to 1.0")
+        return v
 
 class NewsFilterConfig(BaseModel):
     """News filter configuration."""
@@ -67,7 +189,40 @@ class SignalConfig(BaseModel):
     """Signal validation configuration."""
     confidence_threshold: float = Field(ge=0, le=1)
     max_signal_age: int = Field(gt=0)
-    required_fields: List[str]
+    required_fields: List[str] = Field(
+        default=[
+            "direction",
+            "symbol",
+            "entry",
+            "sl",
+            "tp1",
+            "tp2",
+            "tp3",
+            "tp4"
+        ]
+    )
+
+    @field_validator("required_fields")
+    @classmethod
+    def validate_required_fields(cls, v: List[str]) -> List[str]:
+        """Validate required fields configuration.
+        
+        Args:
+            v: List of required field names
+            
+        Returns:
+            List[str]: Validated list of required fields
+            
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        if not v:
+            raise ValueError("required_fields cannot be empty")
+        if not all(isinstance(field, str) for field in v):
+            raise ValueError("required_fields must be strings")
+        if len(set(v)) != len(v):
+            raise ValueError("required_fields must be unique")
+        return v
 
 class LoggingConfig(BaseModel):
     """Logging configuration."""
@@ -103,11 +258,19 @@ class AnalyticsConfig(BaseModel):
 
 class RiskConfig(BaseModel):
     """Risk management configuration from config.yaml."""
-    max_daily_loss_pct: float = Field(gt=0, le=1)
+    # Position Sizing
+    risk_per_trade_pct: float = Field(gt=0, le=1)
     max_position_size_pct: float = Field(gt=0, le=1)
     max_open_positions: int = Field(gt=0)
-    max_risk_per_trade_pct: float = Field(gt=0, le=1)
+    
+    # Loss Limits
+    max_daily_loss_pct: float = Field(gt=0, le=1)
+    daily_loss_limit: float = Field(gt=0)
     min_account_balance: float = Field(gt=0)
+    
+    # Trade Management
+    cooldown_after_loss: int = Field(gt=0)
+    max_slippage: int = Field(gt=0)
 
     def to_position_risk_config(self, account_balance: float) -> PositionRiskConfig:
         """Convert to PositionManager RiskConfig.
@@ -120,20 +283,15 @@ class RiskConfig(BaseModel):
         """
         return PositionRiskConfig(
             account_balance=account_balance,
-            risk_per_trade=self.max_risk_per_trade_pct * 100,  # Convert to percentage
+            risk_per_trade=self.risk_per_trade_pct * 100,  # Convert to percentage
             max_open_trades=self.max_open_positions,
             max_daily_loss=self.max_daily_loss_pct * 100,  # Convert to percentage
             max_symbol_risk=self.max_position_size_pct * 100,  # Convert to percentage
+            daily_loss_limit=self.daily_loss_limit,
+            cooldown_after_loss=self.cooldown_after_loss,
+            max_slippage=self.max_slippage,
             position_sizing="risk_based"  # Default to risk-based position sizing
         )
-
-class TradingConfig(BaseModel):
-    """Trading parameters configuration."""
-    risk_per_trade: float = Field(gt=0, le=1)
-    max_open_trades: int = Field(gt=0)
-    daily_loss_limit: float = Field(gt=0)
-    cooldown_after_loss: int = Field(gt=0)
-    max_slippage: int = Field(gt=0)
 
 class MT5Config(BaseModel):
     """MT5 configuration.
@@ -196,7 +354,6 @@ class MT5Config(BaseModel):
 
 class AppConfig(BaseModel):
     """Main application configuration."""
-    trading: TradingConfig
     trading_sessions: List[TradingSession]
     position: PositionConfig
     news_filter: NewsFilterConfig
@@ -204,7 +361,7 @@ class AppConfig(BaseModel):
     logging: LoggingConfig
     analytics: AnalyticsConfig
     mt5: MT5Config
-    risk: RiskConfig
+    risk: RiskConfig  # This now contains all trading parameters
 
     def __init__(self, **data):
         """Initialize config with environment variables for MT5 credentials."""
