@@ -152,14 +152,6 @@ class TradeExecutor:
                 order_type = request.order_type.value
                 if request.order_type == OrderType.MARKET:
                     order_type = request.action.value
-                    logger.info(
-                        "market_order_type_set",
-                        original_type=request.order_type.name,
-                        action=request.action.name,
-                        final_type=order_type,
-                        mt5_buy=mt5.ORDER_TYPE_BUY,
-                        mt5_sell=mt5.ORDER_TYPE_SELL
-                    )
                     
                 request_dict = {
                     "action": mt5.TRADE_ACTION_DEAL if request.order_type == OrderType.MARKET
@@ -168,8 +160,8 @@ class TradeExecutor:
                     "volume": request.volume,
                     "type": order_type,
                     "price": request.price if request.price else mt5.symbol_info_tick(request.symbol).ask,
-                    "sl": request.stop_loss,
-                    "tp": request.take_profit,
+                    "sl": None,  # Don't set SL initially
+                    "tp": None,  # Don't set TP initially
                     "deviation": request.deviation,
                     "magic": request.magic,
                     "comment": request.comment,
@@ -177,63 +169,66 @@ class TradeExecutor:
                     "type_filling": mt5.ORDER_FILLING_FOK,
                 }
                 
-                # Log final request details
-                logger.info(
-                    "order_request_details",
-                    action=request_dict["action"],
-                    type=request_dict["type"],
-                    is_market=request.order_type == OrderType.MARKET,
-                    is_buy=request_dict["type"] == mt5.ORDER_TYPE_BUY,
-                    is_sell=request_dict["type"] == mt5.ORDER_TYPE_SELL,
-                    price=request_dict["price"],
-                    volume=request_dict["volume"]
-                )
-                
-                if request.expiration:
-                    request_dict["type_time"] = mt5.ORDER_TIME_SPECIFIED
-                    request_dict["expiration"] = int(request.expiration.timestamp())
-                    
                 # Send order
                 result = mt5.order_send(request_dict)
+                if result is None:
+                    logger.error("order_send_returned_none")
+                    return None
+                    
                 if result.retcode != mt5.TRADE_RETCODE_DONE:
                     logger.error(
                         "order_placement_failed",
                         retcode=result.retcode,
                         comment=result.comment,
-                        request=request_dict,
-                        order_type=request_dict["type"],
-                        is_buy=request_dict["type"] == mt5.ORDER_TYPE_BUY,
-                        is_sell=request_dict["type"] == mt5.ORDER_TYPE_SELL
+                        request=request_dict
                     )
                     return None
                     
                 order_id = result.order
-                logger.info(
-                    "order_placed",
-                    order_id=order_id,
-                    symbol=request.symbol,
-                    action=request.action.name,
-                    order_type=request_dict["type"],
-                    is_buy=request_dict["type"] == mt5.ORDER_TYPE_BUY,
-                    is_sell=request_dict["type"] == mt5.ORDER_TYPE_SELL,
-                    volume=request.volume,
-                    price=result.price
-                )
                 
+                # Wait for order to be fully processed
+                await asyncio.sleep(1)
+                
+                # Verify order exists before proceeding
+                position = mt5.positions_get(ticket=order_id)
+                if not position:
+                    logger.error("order_not_found_after_placement", order_id=order_id)
+                    return None
+                    
                 # Store order information
                 self._active_orders[order_id] = {
                     "symbol": request.symbol,
                     "type": order_type,
                     "volume": request.volume,
                     "price": result.price,
-                    "sl": result.sl,
-                    "tp": result.tp,
+                    "sl": None,  # Will be set in modification
+                    "tp": None,  # Will be set in modification
                     "comment": request.comment,
                     "magic": request.magic
                 }
                 
                 # Update position manager
                 await self.position_manager.update_positions()
+                
+                # Set initial SL if provided
+                if request.stop_loss:
+                    await asyncio.sleep(0.5)  # Additional delay before modification
+                    modification = OrderModification(
+                        order_id=order_id,
+                        stop_loss=request.stop_loss
+                    )
+                    if not await self.modify_order(modification):
+                        logger.error("initial_sl_modification_failed", order_id=order_id)
+                        # Don't return None here, as the order is still valid
+                
+                logger.info(
+                    "order_placed",
+                    order_id=order_id,
+                    symbol=request.symbol,
+                    action=request.action.name,
+                    volume=request.volume,
+                    price=result.price
+                )
                 
                 return order_id
                 

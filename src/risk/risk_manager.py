@@ -180,12 +180,16 @@ class RiskManager:
                 
             # Calculate risk amount if not provided
             if risk_amount is None:
-                # Convert risk_per_trade_pct to actual amount
-                risk_amount = Decimal(str(account_info.balance)) * self.risk_params.risk_per_trade_pct
+                # Convert risk_per_trade_pct to actual amount (e.g., 0.25% -> 0.0025)
+                risk_pct = self.risk_params.risk_per_trade_pct
+                if risk_pct > 1:
+                    risk_pct = risk_pct / 100
+                risk_amount = Decimal(str(account_info.balance)) * risk_pct
+                
                 logger.info(
                     "risk_amount_calculated",
                     account_balance=account_info.balance,
-                    risk_per_trade_pct=float(self.risk_params.risk_per_trade_pct * 100),
+                    risk_per_trade_pct=float(risk_pct * 100),
                     risk_amount=float(risk_amount)
                 )
                 
@@ -194,20 +198,15 @@ class RiskManager:
             if price_risk == 0:
                 return Decimal("0"), "Invalid price risk (entry price equals stop loss)"
                 
-            # Calculate position size in lots
-            tick_value = Decimal(str(symbol_info.trade_tick_value))
-            tick_size = Decimal(str(symbol_info.trade_tick_size))
-            contract_size = Decimal(str(symbol_info.trade_contract_size))
+            # For XAUUSD, 1 lot = 100 oz, and 1 pip = $0.01
+            # So 1 pip movement = $1 per lot
+            # Therefore, risk per pip = risk_amount / price_risk_in_pips
+            price_risk_pips = price_risk * 100  # Convert to pips (0.01 = 1 pip)
+            position_size = risk_amount / price_risk_pips
             
-            # Convert price risk to pips/points
-            price_risk_points = price_risk / tick_size
-            
-            # Calculate position size
-            position_size = (risk_amount / (price_risk_points * tick_value)) / contract_size
-            
-            # Apply maximum position size limit
-            max_position_size = Decimal(str(account_info.balance)) * self.risk_params.max_position_size_pct
-            max_position_lots = max_position_size / (contract_size * entry_price)
+            # Apply maximum position size limit (2% of account)
+            max_position_size = Decimal(str(account_info.balance)) * Decimal("0.02")  # 2% max position size
+            max_position_lots = max_position_size / (Decimal("100") * entry_price)  # Convert to lots
             position_size = min(position_size, max_position_lots)
             
             # Round to symbol's lot step
@@ -224,7 +223,7 @@ class RiskManager:
                 "position_size_calculated",
                 symbol=symbol,
                 risk_amount=float(risk_amount),
-                price_risk=float(price_risk),
+                price_risk_pips=float(price_risk_pips),
                 position_size=float(position_size),
                 max_position_size=float(max_position_lots)
             )
