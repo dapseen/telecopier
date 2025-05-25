@@ -38,4 +38,5 @@ isort>=5.12.0     # For import sorting
 flake8>=6.1.0     # For additional linting
 
 # Added from the code block
-rich>=13.7.0 
+rich>=13.7.0
+lark-parser>=0.12.0  # For robust signal parsing 

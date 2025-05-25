@@ -5,41 +5,24 @@ trading signals from Telegram messages into structured data that can be used
 by the trading system.
 """
 
-from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 import re
 from datetime import datetime
 import logging
+from pathlib import Path
+from lark import Lark, ParseError
+
+from .models import TradingSignal, TakeProfit
+from .signal_transformer import SignalTransformer
 
 logger = logging.getLogger(__name__)
-
-@dataclass
-class TakeProfit:
-    """Represents a take profit level with price and pip value."""
-    level: int
-    price: float
-    pips: Optional[int] = None
-
-@dataclass
-class TradingSignal:
-    """Represents a parsed trading signal with all its components."""
-    symbol: str
-    direction: str  # 'buy' or 'sell'
-    entry_price: float
-    stop_loss: float
-    stop_loss_pips: Optional[int]
-    take_profits: List[TakeProfit]
-    timestamp: datetime
-    raw_message: str
-    confidence_score: float
-    additional_notes: Optional[str] = None
 
 class SignalParser:
     """Parser for converting Telegram messages into structured trading signals.
     
     This class handles the parsing of trading signals from Telegram messages,
-    supporting both structured and unstructured message formats. It includes
-    pattern matching, validation, and confidence scoring.
+    supporting both structured and unstructured message formats. It uses a
+    Lark-based parser for robust signal extraction with regex fallback.
     """
     
     # Direction keywords
@@ -49,7 +32,7 @@ class SignalParser:
     }
     
     def __init__(self, valid_symbols: Optional[set[str]] = None):
-        """Initialize the signal parser with compiled regex patterns.
+        """Initialize the signal parser with Lark grammar and regex patterns.
         
         Args:
             valid_symbols: Set of valid trading symbols. If None, will be populated from config.
@@ -57,6 +40,24 @@ class SignalParser:
         # Initialize valid symbols from config if not provided
         self.valid_symbols = valid_symbols or self._load_symbols_from_config()
         
+        # Initialize Lark parser
+        grammar_path = Path(__file__).parent / "grammar" / "signal.lark"
+        try:
+            with open(grammar_path, "r") as f:
+                grammar = f.read()
+            self.parser = Lark(grammar, parser="lalr")
+            self.transformer = SignalTransformer(self.valid_symbols)
+            logger.info("Successfully loaded Lark grammar from %s", grammar_path)
+        except Exception as e:
+            logger.error("Failed to load Lark grammar: %s", str(e))
+            self.parser = None
+            self.transformer = None
+            
+        # Keep regex patterns as fallback
+        self._init_regex_patterns()
+        
+    def _init_regex_patterns(self):
+        """Initialize regex patterns for fallback parsing."""
         # Pattern for symbol and direction - handle both single line and multiline
         self.symbol_pattern = re.compile(
             r'(?:^|\n)\s*([A-Z]{6})\s+(buy|sell|long|short|b|s)\b',
@@ -89,7 +90,6 @@ class SignalParser:
         """
         try:
             import yaml
-            from pathlib import Path
             
             # Load config file
             config_path = Path("config/config.yaml")
@@ -120,95 +120,91 @@ class SignalParser:
     def parse(self, message: str) -> Optional[TradingSignal]:
         """Parse a trading signal message into a structured format.
         
+        This method first attempts to parse using the Lark parser, falling back
+        to regex-based parsing if the Lark parser fails or is not available.
+        
         Args:
             message: The raw message text from Telegram
             
         Returns:
             TradingSignal object if parsing is successful, None otherwise
         """
+        # Normalize message
+        original_message = message
+        message = re.sub(r'[ ]+', ' ', message)  # Only collapse spaces, not newlines
+        message = re.sub(r'\n[ ]+', '\n', message)  # Remove spaces after newlines
+        
+        logger.debug(
+            "Parsing signal (length: %d):\nOriginal: %s\nNormalized: %s",
+            len(message),
+            original_message,
+            message
+        )
+        
+        # Try Lark parser first if available
+        if self.parser and self.transformer:
+            try:
+                # Store raw message in transformer
+                self.transformer._raw_message = message
+                
+                # Parse and transform
+                tree = self.parser.parse(message)
+                signal = self.transformer.transform(tree)
+                
+                if signal:
+                    logger.debug("Successfully parsed signal using Lark parser")
+                    return signal
+                    
+            except ParseError as e:
+                logger.debug(
+                    "Lark parsing failed, falling back to regex: %s",
+                    str(e)
+                )
+            except Exception as e:
+                logger.error(
+                    "Unexpected error in Lark parser: %s",
+                    str(e)
+                )
+                
+        # Fall back to regex parsing
+        logger.debug("Attempting regex-based parsing")
+        return self._parse_with_regex(message)
+        
+    def _parse_with_regex(self, message: str) -> Optional[TradingSignal]:
+        """Parse message using regex patterns (fallback method).
+        
+        Args:
+            message: Normalized message text
+            
+        Returns:
+            TradingSignal if parsing successful, None otherwise
+        """
         try:
-            # Normalize message by replacing multiple spaces with single space, but preserve newlines
-            original_message = message
-            message = re.sub(r'[ ]+', ' ', message)  # Only collapse spaces, not newlines
-            # Do NOT collapse newlines into spaces
-            # message = re.sub(r'\n\s*', '\n', message)  # This is fine to keep for trimming spaces after newlines
-            message = re.sub(r'\n[ ]+', '\n', message)  # Remove spaces after newlines
-            
-            logger.debug(
-                "Parsing signal (length: %d):\nOriginal: %s\nNormalized: %s",
-                len(message),
-                original_message,
-                message
-            )
-            
             # Extract basic signal components
             try:
                 symbol, direction = self._extract_symbol_and_direction(message)
-                logger.debug(
-                    "Extracted symbol and direction: %s %s (pattern: %s)",
-                    symbol,
-                    direction,
-                    self.symbol_pattern.pattern
-                )
             except ValueError as e:
-                logger.debug(
-                    "Failed to extract symbol and direction: %s (pattern: %s)\nMessage: %s",
-                    str(e),
-                    self.symbol_pattern.pattern,
-                    message[:100]
-                )
+                logger.debug("Failed to extract symbol and direction: %s", str(e))
                 return None
-            
+                
             try:
                 entry_price = self._extract_entry_price(message)
-                logger.debug(
-                    "Extracted entry price: %s (pattern: %s)",
-                    entry_price,
-                    self.entry_pattern.pattern
-                )
             except ValueError as e:
-                logger.debug(
-                    "Failed to extract entry price: %s (pattern: %s)\nMessage: %s",
-                    str(e),
-                    self.entry_pattern.pattern,
-                    message[:100]
-                )
+                logger.debug("Failed to extract entry price: %s", str(e))
                 return None
-            
+                
             try:
                 stop_loss, sl_pips = self._extract_stop_loss(message)
-                logger.debug(
-                    "Extracted stop loss: %s (pips: %s) (pattern: %s)",
-                    stop_loss,
-                    sl_pips,
-                    self.sl_pattern.pattern
-                )
             except ValueError as e:
-                logger.debug(
-                    "Failed to extract stop loss: %s (pattern: %s)\nMessage: %s",
-                    str(e),
-                    self.sl_pattern.pattern,
-                    message[:100]
-                )
+                logger.debug("Failed to extract stop loss: %s", str(e))
                 return None
-            
+                
             try:
                 take_profits = self._extract_take_profits(message)
-                logger.debug(
-                    "Extracted %d take profits: %s (pattern: %s)",
-                    len(take_profits),
-                    [(tp.level, tp.price, tp.pips) for tp in take_profits],
-                    self.tp_pattern.pattern
-                )
             except ValueError as e:
-                logger.debug(
-                    "Failed to extract take profits: %s (pattern: %s)\nMessage: %s",
-                    str(e),
-                    self.tp_pattern.pattern,
-                    message[:100]
-                )
+                logger.debug("Failed to extract take profits: %s", str(e))
                 return None
-            
+                
             # Calculate confidence score
             confidence_score = self._calculate_confidence_score(
                 message, symbol, direction, entry_price, stop_loss, take_profits
@@ -230,15 +226,12 @@ class SignalParser:
                 additional_notes=additional_notes
             )
             
-            logger.debug(
-                "Successfully parsed signal: %s",
-                signal.__dict__
-            )
+            logger.debug("Successfully parsed signal using regex")
             return signal
             
         except Exception as e:
             logger.error(
-                "Signal parse failed: %s\nMessage: %s",
+                "Regex parsing failed: %s\nMessage: %s",
                 str(e),
                 message[:100]
             )
