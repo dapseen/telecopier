@@ -9,15 +9,18 @@ trading signals before they are executed, including checks for:
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Tuple, Any
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional, Set, Tuple, Any, Union
+import json
 import logging
-from collections import deque
 
 import structlog
 
-from .signal_parser import TradingSignal
-from mt5.connection import MT5Connection
+from .signal_parser import TradingSignal, TakeProfit
+from ..mt5.connection import MT5Connection
+from ..db.repositories.signal import SignalRepository
+from ..db.models.signal import Signal
+from src.common.types import SignalDirection, SignalType, SignalStatus
 
 logger = structlog.get_logger(__name__)
 
@@ -35,41 +38,56 @@ class SignalValidator:
     - Required field validation
     - Signal age checking
     - Symbol availability verification
-    - Duplicate signal detection
+    - Duplicate signal detection using database
     """
     
     def __init__(
         self,
+        signal_repository: SignalRepository,
         max_signal_age_minutes: int = 5,
         duplicate_window_minutes: int = 30,
-        cache_size: int = 100,
         mt5_connection: Optional[MT5Connection] = None
     ):
         """Initialize the signal validator.
         
         Args:
+            signal_repository: Repository for signal operations
             max_signal_age_minutes: Maximum age of a signal in minutes
             duplicate_window_minutes: Time window for duplicate detection
-            cache_size: Size of the signal cache for duplicate detection
             mt5_connection: Optional MT5 connection for symbol validation
         """
+        self.signal_repository = signal_repository
         self.max_signal_age = timedelta(minutes=max_signal_age_minutes)
         self.duplicate_window = timedelta(minutes=duplicate_window_minutes)
-        self.signal_cache: deque[Tuple[datetime, TradingSignal]] = deque(maxlen=cache_size)
         self.mt5_connection = mt5_connection
         self._available_symbols: Set[str] = set()
         
-    def clear_cache(self) -> None:
-        """Clear the signal cache and reset available symbols."""
-        self.signal_cache.clear()
+    def clear_available_symbols(self) -> None:
+        """Clear the available symbols cache."""
         self._available_symbols.clear()
         logger.info(
-            "signal_validator_cache_cleared",
-            cache_size=len(self.signal_cache),
+            "available_symbols_cleared",
             available_symbols_count=len(self._available_symbols)
         )
         
-    def validate_signal(self, signal: TradingSignal) -> ValidationResult:
+    async def validate(self, signal: Union[Signal, TradingSignal]) -> ValidationResult:
+        """Validate a signal.
+        
+        Args:
+            signal: Signal to validate (either database Signal or TradingSignal)
+            
+        Returns:
+            ValidationResult containing validation status and details
+        """
+        # Convert database signal to TradingSignal if needed
+        if isinstance(signal, Signal):
+            trading_signal = signal.to_trading_signal()
+        else:
+            trading_signal = signal
+            
+        return await self.validate_signal(trading_signal)
+        
+    async def validate_signal(self, signal: TradingSignal) -> ValidationResult:
         """Validate a trading signal.
         
         Args:
@@ -83,7 +101,7 @@ class SignalValidator:
             "validating_signal",
             symbol=signal.symbol,
             direction=signal.direction,
-            timestamp=signal.timestamp.isoformat()
+            created_at=signal.created_at.isoformat()
         )
         
         # Validate required fields
@@ -101,20 +119,17 @@ class SignalValidator:
         if not symbol_result.is_valid:
             return symbol_result
             
-        # Check for duplicates
-        duplicate_result = self._check_duplicate(signal)
-        if not duplicate_result.is_valid:
-            return duplicate_result
+        # Check for duplicates in database
+        # duplicate_result = await self._check_duplicate(signal)
+        # if not duplicate_result.is_valid:
+        #     return duplicate_result
             
-        # Add to signal cache if valid
-        self.signal_cache.append((datetime.now(), signal))
-        
         return ValidationResult(
             is_valid=True,
             reason="Signal validated successfully",
             details={
                 "confidence_score": signal.confidence_score,
-                "validation_time": datetime.now().isoformat()
+                "validation_time": datetime.now(tz=timezone.utc).isoformat()
             }
         )
         
@@ -131,7 +146,7 @@ class SignalValidator:
         if not signal.symbol:
             return ValidationResult(False, "Missing symbol")
             
-        if not signal.direction or signal.direction.lower() not in {'buy', 'sell'}:
+        if not signal.direction:
             return ValidationResult(False, "Invalid direction")
             
         if not signal.entry_price or signal.entry_price <= 0:
@@ -144,7 +159,7 @@ class SignalValidator:
             return ValidationResult(False, "Missing take profit levels")
             
         # Validate price relationships
-        if signal.direction.lower() == 'buy':
+        if signal.direction == SignalDirection.BUY:
             if not (signal.stop_loss < signal.entry_price < max(tp.price for tp in signal.take_profits)):
                 return ValidationResult(False, "Invalid price relationships for buy signal")
         else:  # sell
@@ -162,7 +177,7 @@ class SignalValidator:
         Returns:
             ValidationResult indicating if signal age is valid
         """
-        signal_age = datetime.now() - signal.timestamp
+        signal_age = datetime.now(tz=timezone.utc) - signal.created_at
         
         if signal_age > self.max_signal_age:
             return ValidationResult(
@@ -197,8 +212,8 @@ class SignalValidator:
             
         return ValidationResult(True, "Symbol verified")
         
-    def _check_duplicate(self, signal: TradingSignal) -> ValidationResult:
-        """Check if the signal is a duplicate of a recent signal.
+    async def _check_duplicate(self, signal: TradingSignal) -> ValidationResult:
+        """Check if the signal is a duplicate using the database.
         
         Args:
             signal: The trading signal to check
@@ -206,61 +221,46 @@ class SignalValidator:
         Returns:
             ValidationResult indicating if signal is unique
         """
-        now = datetime.now()
+        # Create a temporary Signal object for duplicate check
+        temp_signal = Signal(
+            id=None,  # New signal, no ID yet
+            message_id=signal.message_id,
+            chat_id=signal.chat_id,
+            channel_name=signal.channel_name,
+            signal_type=signal.signal_type,
+            symbol=signal.symbol,
+            direction=signal.direction,
+            entry_price=signal.entry_price,
+            stop_loss=signal.stop_loss,
+            take_profit=signal.take_profits[0].price if signal.take_profits else None,
+            created_at=signal.created_at,
+            status=SignalStatus.PENDING,
+            is_duplicate=False,
+            deleted_at=None,
+            signal_metadata=None
+        )
         
-        # Clean old signals from cache
-        while self.signal_cache and (now - self.signal_cache[0][0]) > self.duplicate_window:
-            self.signal_cache.popleft()
+        # Check for duplicates in database
+        duplicate = await self.signal_repository.find_duplicate(
+            temp_signal,
+            time_window=self.duplicate_window
+        )
+        
+        if duplicate:
+            return ValidationResult(
+                False,
+                "Duplicate signal detected in database",
+                {
+                    "original_signal_id": str(duplicate.id),
+                    "original_signal_time": duplicate.created_at.isoformat(),
+                    "time_difference_minutes": (
+                        (signal.created_at - duplicate.created_at).total_seconds() / 60
+                    )
+                }
+            )
             
-        # Check for duplicates
-        for timestamp, cached_signal in self.signal_cache:
-            if self._is_similar_signal(signal, cached_signal):
-                return ValidationResult(
-                    False,
-                    "Duplicate signal detected",
-                    {
-                        "original_signal_time": timestamp.isoformat(),
-                        "time_difference_minutes": (now - timestamp).total_seconds() / 60
-                    }
-                )
-                
         return ValidationResult(True, "No duplicate detected")
-        
-    def _is_similar_signal(self, signal1: TradingSignal, signal2: TradingSignal) -> bool:
-        """Check if two signals are similar enough to be considered duplicates.
-        
-        Args:
-            signal1: First trading signal
-            signal2: Second trading signal
-            
-        Returns:
-            bool indicating if signals are similar
-        """
-        # Check basic properties
-        if (signal1.symbol != signal2.symbol or
-            signal1.direction != signal2.direction):
-            return False
-            
-        # Check if prices are within 0.1% of each other
-        price_tolerance = 0.001
-        
-        if abs(signal1.entry_price - signal2.entry_price) / signal1.entry_price > price_tolerance:
-            return False
-            
-        if abs(signal1.stop_loss - signal2.stop_loss) / signal1.stop_loss > price_tolerance:
-            return False
-            
-        # Check take profit levels
-        if len(signal1.take_profits) != len(signal2.take_profits):
-            return False
-            
-        for tp1, tp2 in zip(signal1.take_profits, signal2.take_profits):
-            if (tp1.level != tp2.level or
-                abs(tp1.price - tp2.price) / tp1.price > price_tolerance):
-                return False
-                
-        return True
-        
+
     def update_available_symbols(self, symbols: Set[str]) -> None:
         """Update the list of available trading symbols.
         

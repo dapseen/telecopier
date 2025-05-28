@@ -26,7 +26,7 @@ class DailyStatistics(Base):
     """Model for storing daily trading statistics.
     
     Attributes:
-        date: Trading date
+        trading_date: Trading date
         total_trades: Total number of trades
         winning_trades: Number of winning trades
         losing_trades: Number of losing trades
@@ -43,13 +43,13 @@ class DailyStatistics(Base):
         max_drawdown: Maximum drawdown
         recovery_factor: Recovery factor
         sharpe_ratio: Sharpe ratio
-        metadata: Additional statistics metadata
+        stats_metadata: Additional statistics metadata
     """
     
     __tablename__ = "daily_statistics"
     
     # Date
-    date: Mapped[date] = mapped_column(
+    trading_date: Mapped[date] = mapped_column(
         Date,
         nullable=False,
         unique=True,
@@ -137,7 +137,7 @@ class DailyStatistics(Base):
     )
     
     # Additional metadata
-    metadata: Mapped[Optional[str]] = mapped_column(
+    stats_metadata: Mapped[Optional[str]] = mapped_column(
         String(1000),
         nullable=True
     )
@@ -149,7 +149,7 @@ class DailyStatistics(Base):
             str: String representation
         """
         return (
-            f"DailyStatistics(date={self.date}, "
+            f"DailyStatistics(trading_date={self.trading_date}, "
             f"total_trades={self.total_trades}, "
             f"total_profit={self.total_profit})"
         )

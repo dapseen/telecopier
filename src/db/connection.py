@@ -10,6 +10,7 @@ This module provides database connection management including:
 import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
+from functools import lru_cache
 
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import (
@@ -18,7 +19,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
     AsyncEngine
 )
-from sqlalchemy.pool import AsyncAdaptedQueuePool
+from sqlalchemy.pool import NullPool  # Use NullPool for better async handling
+from sqlalchemy import text
 
 import structlog
 
@@ -26,6 +28,18 @@ import structlog
 load_dotenv()
 
 logger = structlog.get_logger(__name__)
+
+@lru_cache()
+def get_database_url() -> str:
+    """Get the database connection URL.
+    
+    Returns:
+        str: Database connection URL from environment or default
+    """
+    return os.getenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/goldmirror"
+    )
 
 class DatabaseConnection:
     """Manages database connections and sessions.
@@ -40,32 +54,21 @@ class DatabaseConnection:
     def __init__(
         self,
         database_url: Optional[str] = None,
-        pool_size: int = 5,
-        max_overflow: int = 10,
         echo: bool = False
     ):
         """Initialize database connection.
         
         Args:
             database_url: Database connection URL. If not provided, will use DATABASE_URL env var
-            pool_size: Size of the connection pool
-            max_overflow: Maximum number of connections that can be created beyond pool_size
             echo: Whether to echo SQL statements
         """
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql+asyncpg://postgres:postgres@localhost:5432/goldmirror"
-        )
+        self.database_url = database_url or get_database_url()
         
-        # Create async engine with connection pooling
+        # Create async engine without connection pooling (better for async)
         self.engine: AsyncEngine = create_async_engine(
             self.database_url,
-            poolclass=AsyncAdaptedQueuePool,
-            pool_size=pool_size,
-            max_overflow=max_overflow,
+            poolclass=NullPool,  # Don't use connection pooling with async
             echo=echo,
-            pool_pre_ping=True,  # Enable connection health checks
-            pool_recycle=3600,   # Recycle connections after 1 hour
         )
         
         # Create async session factory
@@ -79,8 +82,7 @@ class DatabaseConnection:
         
         logger.info(
             "database_connection_initialized",
-            pool_size=pool_size,
-            max_overflow=max_overflow,
+            database_url=self.database_url,
             echo=echo
         )
         
@@ -103,7 +105,7 @@ class DatabaseConnection:
                 await session.rollback()
                 logger.error(
                     "database_session_error",
-                    error=str(e)
+                    exc_info=True
                 )
                 raise
             finally:
@@ -117,12 +119,13 @@ class DatabaseConnection:
         """
         try:
             async with self.session() as session:
-                await session.execute("SELECT 1")
+                await session.execute(text("SELECT 1"))
+                await session.commit()
             return True
         except Exception as e:
             logger.error(
                 "database_connection_check_failed",
-                error=str(e)
+                exc_info=True
             )
             return False
             
@@ -166,16 +169,12 @@ def get_async_session() -> async_sessionmaker[AsyncSession]:
 
 def init_db(
     database_url: Optional[str] = None,
-    pool_size: int = 5,
-    max_overflow: int = 10,
     echo: bool = False
 ) -> DatabaseConnection:
     """Initialize the global database connection.
     
     Args:
         database_url: Database connection URL
-        pool_size: Size of the connection pool
-        max_overflow: Maximum number of connections that can be created beyond pool_size
         echo: Whether to echo SQL statements
         
     Returns:
@@ -190,8 +189,6 @@ def init_db(
         
     _db = DatabaseConnection(
         database_url=database_url,
-        pool_size=pool_size,
-        max_overflow=max_overflow,
         echo=echo
     )
     

@@ -8,7 +8,6 @@ This script provides commands for managing database migrations:
 """
 
 import argparse
-import asyncio
 import logging
 import os
 import sys
@@ -63,7 +62,7 @@ def get_current_revision() -> Optional[str]:
         logger.error(f"Failed to get current revision: {e}")
         return None
 
-async def create_migration(message: str) -> None:
+def create_migration(message: str) -> None:
     """Create a new migration.
     
     Args:
@@ -81,7 +80,7 @@ async def create_migration(message: str) -> None:
         logger.error(f"Failed to create migration: {e}")
         raise
 
-async def upgrade_migrations(revision: str = "head") -> None:
+def upgrade_migrations(revision: str = "head") -> None:
     """Upgrade database to a specific revision.
     
     Args:
@@ -95,7 +94,7 @@ async def upgrade_migrations(revision: str = "head") -> None:
         logger.error(f"Failed to upgrade database: {e}")
         raise
 
-async def downgrade_migrations(revision: str) -> None:
+def downgrade_migrations(revision: str) -> None:
     """Downgrade database to a specific revision.
     
     Args:
@@ -109,7 +108,7 @@ async def downgrade_migrations(revision: str) -> None:
         logger.error(f"Failed to downgrade database: {e}")
         raise
 
-async def show_migration_history() -> None:
+def show_migration_history() -> None:
     """Show migration history."""
     try:
         config = get_alembic_config()
@@ -165,13 +164,13 @@ def main() -> None:
     args = parser.parse_args()
     
     if args.command == "create":
-        asyncio.run(create_migration(args.message))
+        create_migration(args.message)
     elif args.command == "upgrade":
-        asyncio.run(upgrade_migrations(args.revision))
+        upgrade_migrations(args.revision)
     elif args.command == "downgrade":
-        asyncio.run(downgrade_migrations(args.revision))
+        downgrade_migrations(args.revision)
     elif args.command == "history":
-        asyncio.run(show_migration_history())
+        show_migration_history()
     else:
         parser.print_help()
 

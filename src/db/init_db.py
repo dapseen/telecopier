@@ -13,6 +13,7 @@ from typing import Optional
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+import structlog
 
 from src.db.connection import DatabaseConnection, init_db
 from src.db.models.base import Base
@@ -20,7 +21,7 @@ from src.db.models.signal import Signal
 from src.db.models.trade import Trade
 from src.db.models.statistics import DailyStatistics
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 async def create_tables(engine: AsyncEngine) -> None:
     """Create database tables.
@@ -32,18 +33,17 @@ async def create_tables(engine: AsyncEngine) -> None:
         # Create tables
         await conn.run_sync(Base.metadata.create_all)
         
-        # Create indexes
+        # Create indexes one by one
         await conn.execute(
-            text("""
-            CREATE INDEX IF NOT EXISTS idx_signals_channel_date 
-            ON signals (channel_name, created_at);
-            
-            CREATE INDEX IF NOT EXISTS idx_trades_symbol_date 
-            ON trades (symbol, created_at);
-            
-            CREATE INDEX IF NOT EXISTS idx_statistics_date 
-            ON daily_statistics (date);
-            """)
+            text("CREATE INDEX IF NOT EXISTS idx_signals_channel_date ON signals (channel_name, created_at)")
+        )
+        
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_trades_symbol_date ON trades (symbol, created_at)")
+        )
+        
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_statistics_date ON daily_statistics (trading_date)")
         )
         
     logger.info("database_tables_created")
@@ -76,8 +76,15 @@ async def init_database(
     
     try:
         # Test connection
-        if not await db.check_connection():
-            raise RuntimeError("Failed to connect to database")
+        async with db.session() as session:
+            # Test if we can execute queries
+            await session.execute(text("SELECT 1"))
+            await session.commit()
+            
+            # Test if we have the necessary permissions
+            await session.execute(text("CREATE TABLE IF NOT EXISTS _test_table (id serial PRIMARY KEY)"))
+            await session.execute(text("DROP TABLE _test_table"))
+            await session.commit()
             
         # Drop tables if requested
         if drop_existing:
@@ -95,12 +102,19 @@ async def init_database(
         return db
         
     except Exception as e:
-        logger.error(
-            "database_initialization_failed",
-            error=str(e)
-        )
-        await db.close()
-        raise
+        error_msg = str(e)
+        if "password authentication failed" in error_msg.lower():
+            logger.error("database_auth_failed", exc_info=True)
+            raise RuntimeError("Database authentication failed. Please check your credentials.")
+        elif "connection refused" in error_msg.lower():
+            logger.error("database_connection_refused", exc_info=True)
+            raise RuntimeError("Database connection refused. Please check if PostgreSQL is running.")
+        elif "permission denied" in error_msg.lower():
+            logger.error("database_permission_denied", exc_info=True)
+            raise RuntimeError("Database permission denied. Please check user permissions.")
+        else:
+            logger.error("database_initialization_failed", exc_info=True)
+            raise RuntimeError(f"Failed to initialize database: {error_msg}")
 
 async def reset_database(
     database_url: Optional[str] = None

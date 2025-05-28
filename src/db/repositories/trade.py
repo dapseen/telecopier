@@ -1,24 +1,20 @@
-"""Trade repository with trade-specific operations.
+"""Trade repository for database operations.
 
-This module provides:
-- Trade-specific database operations
-- Trade status management
-- Trade querying by various criteria
-- Trade statistics and analytics
+This module provides database operations for trade management.
 """
 
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, update, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
+from sqlalchemy.sql.expression import true, false
 
-from src.db.models.trade import Trade
-from src.db.repositories.base import BaseRepository
-from src.mt5.types import OrderType, TradeState
-from src.telegram.parser import SignalDirection
+from ..models.trade import Trade
+from .base import BaseRepository
+from src.common.types import SignalDirection, TradeState, OrderType
 
 class TradeRepository(BaseRepository[Trade]):
     """Repository for trade operations.
@@ -129,7 +125,7 @@ class TradeRepository(BaseRepository[Trade]):
         
         # Add age conditions
         if min_age or max_age:
-            now = datetime.now(timezone=True)
+            now = datetime.now(tz=timezone.utc)
             if min_age:
                 query = query.where(
                     Trade.created_at >= now - min_age
@@ -297,7 +293,7 @@ class TradeRepository(BaseRepository[Trade]):
         """
         # Build query
         query = select(Trade).where(
-            Trade.created_at <= datetime.now(timezone=True) - max_age
+            Trade.created_at <= datetime.now(tz=timezone.utc) - max_age
         )
         
         if state:

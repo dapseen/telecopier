@@ -23,8 +23,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.models.base import Base
-from src.mt5.types import OrderType, TradeState
-from src.telegram.parser import SignalDirection
+from src.common.types import OrderType, TradeState, SignalDirection
 
 class Trade(Base):
     """Model for storing MT5 trades.
@@ -46,7 +45,7 @@ class Trade(Base):
         commission: Trade commission
         swap: Swap charges
         error_message: Error message if execution failed
-        metadata: Additional trade metadata as JSON
+        trade_metadata: Additional trade metadata as JSON
     """
     
     __tablename__ = "trades"
@@ -137,7 +136,7 @@ class Trade(Base):
     )
     
     # Additional metadata
-    metadata: Mapped[Optional[str]] = mapped_column(
+    trade_metadata: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True
     )
@@ -242,4 +241,4 @@ class Trade(Base):
         self.commission = commission
         self.swap = swap
         self.state = TradeState.CLOSED
-        self.updated_at = datetime.now(timezone=True) 
+        self.updated_at = datetime.now(tz=timezone.utc) 

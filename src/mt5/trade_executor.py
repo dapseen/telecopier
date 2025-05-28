@@ -1,34 +1,35 @@
-"""MT5 trade execution module.
+"""Trade executor for MetaTrader 5.
 
-This module implements the TradeExecutor class which handles:
-- Order placement and management
-- Partial take profit handling
-- Breakeven management
-- Order modifications
-- Risk management through PositionManager
+This module provides functionality to:
+- Execute trades on MT5
+- Manage orders and positions
+- Handle trade execution errors
 """
 
-from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
+from typing import Dict, List, Optional, Any, Tuple
+from uuid import UUID
 from enum import Enum
-from typing import Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass
 import asyncio
 
-import MetaTrader5 as mt5
 import structlog
-from pydantic import BaseModel, Field, validator
+import MetaTrader5 as mt5
+from pydantic import BaseModel, Field
 
-from .position_manager import PositionManager, RiskConfig
+from src.common.types import OrderType as CommonOrderType, TradeState, SignalDirection
+from .connection import MT5Connection
+from .risk import RiskConfig, PositionManager
+
 
 logger = structlog.get_logger(__name__)
 
 class OrderType(Enum):
     """Types of trading orders."""
-    MARKET = mt5.ORDER_TYPE_MARKET
-    LIMIT = mt5.ORDER_TYPE_LIMIT
-    STOP = mt5.ORDER_TYPE_STOP
-    STOP_LIMIT = mt5.ORDER_TYPE_STOP_LIMIT
+    MARKET = CommonOrderType.MARKET
+    LIMIT = CommonOrderType.LIMIT
+    STOP = CommonOrderType.STOP
+    STOP_LIMIT = CommonOrderType.STOP_LIMIT
 
 class OrderAction(Enum):
     """Trading order actions."""

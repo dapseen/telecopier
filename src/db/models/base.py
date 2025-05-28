@@ -6,7 +6,7 @@ This module provides:
 - Model utilities
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import UUID, uuid4
 
@@ -93,7 +93,7 @@ class Base(DeclarativeBase):
                 
     def soft_delete(self) -> None:
         """Mark model instance as deleted."""
-        self.deleted_at = datetime.now(timezone=True)
+        self.deleted_at = datetime.now(tz=timezone.utc)
         
     def restore(self) -> None:
         """Restore soft-deleted model instance."""

@@ -6,11 +6,13 @@ This module defines the Signal model which stores:
 - Signal status and processing state
 """
 
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Optional, List
 from uuid import UUID
+import json
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Enum,
@@ -18,12 +20,13 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
-    Text
+    Text,
+    Column
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, remote
 
-from src.db.models.base import Base
-from src.telegram.parser import SignalDirection, SignalType
+from .base import Base
+from src.common.types import SignalDirection, SignalType, SignalStatus
 
 class Signal(Base):
     """Model for storing Telegram trading signals.
@@ -45,7 +48,7 @@ class Signal(Base):
         error_message: Error message if processing failed
         is_duplicate: Whether signal was identified as duplicate
         original_signal_id: ID of original signal if this is a duplicate
-        metadata: Additional signal metadata as JSON
+        signal_metadata: Additional signal metadata as JSON
     """
     
     __tablename__ = "signals"
@@ -57,7 +60,7 @@ class Signal(Base):
         index=True
     )
     chat_id: Mapped[int] = mapped_column(
-        Integer,
+        BigInteger,  # Use BigInteger for large Telegram chat IDs
         nullable=False,
         index=True
     )
@@ -103,10 +106,10 @@ class Signal(Base):
     )
     
     # Processing state
-    status: Mapped[str] = mapped_column(
-        String(50),
+    status: Mapped[SignalStatus] = mapped_column(
+        Enum(SignalStatus),
         nullable=False,
-        default="PENDING",
+        default=SignalStatus.PENDING,
         index=True
     )
     processed_at: Mapped[Optional[datetime]] = mapped_column(
@@ -126,12 +129,13 @@ class Signal(Base):
         index=True
     )
     original_signal_id: Mapped[Optional[UUID]] = mapped_column(
-        ForeignKey("signals.id"),
-        nullable=True
+        ForeignKey("signals.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
     )
     
     # Additional metadata
-    metadata: Mapped[Optional[str]] = mapped_column(
+    signal_metadata: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True
     )
@@ -142,10 +146,14 @@ class Signal(Base):
         back_populates="signal",
         cascade="all, delete-orphan"
     )
+    
+    # Self-referential relationship for duplicate signals
     original_signal = relationship(
         "Signal",
-        remote_side=[id],
-        backref="duplicate_signals"
+        primaryjoin="Signal.original_signal_id == remote(Signal.id)",
+        backref="duplicate_signals",
+        lazy="joined",
+        uselist=False
     )
     
     def __repr__(self) -> str:
@@ -180,12 +188,12 @@ class Signal(Base):
         return (
             self.deleted_at is None
             and not self.is_duplicate
-            and self.status != "CANCELLED"
+            and self.status != SignalStatus.CANCELLED
         )
         
     def mark_as_processed(
         self,
-        status: str = "COMPLETED",
+        status: SignalStatus = SignalStatus.COMPLETED,
         error_message: Optional[str] = None
     ) -> None:
         """Mark signal as processed.
@@ -195,7 +203,7 @@ class Signal(Base):
             error_message: Error message if processing failed
         """
         self.status = status
-        self.processed_at = datetime.now(timezone=True)
+        self.processed_at = datetime.now(tz=timezone.utc)
         if error_message:
             self.error_message = error_message
             
@@ -207,5 +215,49 @@ class Signal(Base):
         """
         self.is_duplicate = True
         self.original_signal_id = original_signal_id
-        self.status = "DUPLICATE"
-        self.processed_at = datetime.now(timezone=True) 
+        self.status = SignalStatus.DUPLICATE
+        self.processed_at = datetime.now(tz=timezone.utc)
+        
+    def to_trading_signal(self) -> "TradingSignal":
+        """Convert database signal to TradingSignal model.
+        
+        Returns:
+            TradingSignal: Trading signal representation
+        """
+        from src.telegram.signal_parser import TradingSignal, TakeProfit
+        
+        # Convert take profits from metadata if available
+        take_profits = []
+        if self.signal_metadata:
+            try:
+                metadata = json.loads(self.signal_metadata)
+                if "take_profits" in metadata:
+                    take_profits = [
+                        TakeProfit(
+                            level=tp["level"],
+                            price=tp["price"],
+                            pips=tp.get("pips")
+                        )
+                        for tp in metadata["take_profits"]
+                    ]
+                elif self.take_profit:  # Fallback to single take profit
+                    take_profits = [TakeProfit(level=1, price=self.take_profit)]
+            except (json.JSONDecodeError, KeyError):
+                if self.take_profit:  # Fallback to single take profit
+                    take_profits = [TakeProfit(level=1, price=self.take_profit)]
+        
+        return TradingSignal(
+            message_id=self.message_id,
+            chat_id=self.chat_id,
+            channel_name=self.channel_name,
+            signal_type=self.signal_type,
+            symbol=self.symbol,
+            direction=self.direction,
+            entry_price=self.entry_price,
+            stop_loss=self.stop_loss,
+            take_profits=take_profits,
+            risk_reward=self.risk_reward,
+            lot_size=self.lot_size,
+            raw_message=self.signal_metadata or "",
+            created_at=self.created_at
+        ) 

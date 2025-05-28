@@ -1,23 +1,20 @@
-"""Signal repository with signal-specific operations.
+"""Signal repository for database operations.
 
-This module provides:
-- Signal-specific database operations
-- Duplicate signal detection
-- Signal status management
-- Signal querying by various criteria
+This module provides database operations for signal management.
 """
 
-from datetime import datetime, timedelta
-from typing import List, Optional, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional, Dict, Any, Tuple
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
+from sqlalchemy.sql.expression import true, false
 
-from src.db.models.signal import Signal
-from src.db.repositories.base import BaseRepository
-from src.telegram.parser import SignalDirection, SignalType
+from ..models.signal import Signal
+from .base import BaseRepository
+from src.common.types import SignalDirection, SignalType, SignalStatus
 
 class SignalRepository(BaseRepository[Signal]):
     """Repository for signal operations.
@@ -102,7 +99,7 @@ class SignalRepository(BaseRepository[Signal]):
         
         # Add max age condition
         if max_age:
-            min_date = datetime.now(timezone=True) - max_age
+            min_date = datetime.now(tz=timezone.utc) - max_age
             query = query.where(Signal.created_at >= min_date)
             
         # Order by creation date
@@ -115,16 +112,31 @@ class SignalRepository(BaseRepository[Signal]):
         signal: Signal,
         time_window: timedelta = timedelta(minutes=5)
     ) -> Optional[Signal]:
-        """Find duplicate signal within time window.
+        """Find duplicate signal using both message ID and content matching.
+        
+        The method uses a two-step approach:
+        1. First checks for exact duplicate using message_id and chat_id
+        2. If no exact duplicate found, checks for similar signals within time window
         
         Args:
             signal: Signal to check for duplicates
-            time_window: Time window to look for duplicates
+            time_window: Time window to look for similar signals
             
         Returns:
             Optional[Signal]: Duplicate signal if found
         """
-        # Build query for potential duplicates
+        # Step 1: Check for exact message ID duplicate
+        exact_duplicate = await self.get_by_message_id(
+            message_id=signal.message_id,
+            chat_id=signal.chat_id
+        )
+        if exact_duplicate:
+            return exact_duplicate
+
+        # Step 2: If no exact duplicate, check for similar signals in time window
+        now = datetime.now(tz=timezone.utc)
+        
+        # Build query for similar signals
         query = select(Signal).where(
             and_(
                 Signal.symbol == signal.symbol,
@@ -133,9 +145,11 @@ class SignalRepository(BaseRepository[Signal]):
                 Signal.channel_name == signal.channel_name,
                 Signal.is_duplicate.is_(False),
                 Signal.deleted_at.is_(None),
-                Signal.created_at >= signal.created_at - time_window,
-                Signal.created_at <= signal.created_at + time_window,
-                Signal.id != signal.id
+                Signal.created_at >= now - time_window,
+                Signal.created_at <= now + time_window,
+                Signal.id != signal.id,
+                # Exclude the exact message we just checked
+                Signal.message_id != signal.message_id
             )
         )
         
@@ -166,7 +180,7 @@ class SignalRepository(BaseRepository[Signal]):
         
         # Add age conditions
         if min_age or max_age:
-            now = datetime.now(timezone=True)
+            now = datetime.now(tz=timezone.utc)
             if min_age:
                 query = query.where(
                     Signal.created_at >= now - min_age
@@ -245,7 +259,7 @@ class SignalRepository(BaseRepository[Signal]):
         """
         # Build query
         query = select(Signal).where(
-            Signal.created_at <= datetime.now(timezone=True) - max_age
+            Signal.created_at <= datetime.now(tz=timezone.utc) - max_age
         )
         
         if status:
@@ -260,4 +274,61 @@ class SignalRepository(BaseRepository[Signal]):
             signal.soft_delete()
             
         await self.session.flush()
-        return len(signals) 
+        return len(signals)
+        
+    async def find_duplicate_by_data(
+        self,
+        symbol: str,
+        direction: SignalDirection,
+        entry_price: float,
+        message_id: int,
+        chat_id: int,
+        channel_name: str,
+        time_window: timedelta = timedelta(minutes=5)
+    ) -> Optional[Signal]:
+        """Find duplicate signal using signal data.
+        
+        Args:
+            symbol: Trading symbol
+            direction: Trade direction
+            entry_price: Entry price
+            message_id: Telegram message ID
+            chat_id: Telegram chat ID
+            channel_name: Channel name
+            time_window: Time window to look for duplicates
+            
+        Returns:
+            Optional[Signal]: Duplicate signal if found
+        """
+        # Step 1: Check for exact message ID duplicate
+        exact_duplicate = await self.get_by_message_id(
+            message_id=message_id,
+            chat_id=chat_id
+        )
+        if exact_duplicate:
+            return exact_duplicate
+
+        # Step 2: If no exact duplicate, check for similar signals in time window
+        now = datetime.now(tz=timezone.utc)
+        
+        # Build query for similar signals
+        query = select(Signal).where(
+            and_(
+                Signal.symbol == symbol,
+                Signal.direction == direction,
+                Signal.entry_price == entry_price,
+                Signal.channel_name == channel_name,
+                Signal.is_duplicate.is_(False),
+                Signal.deleted_at.is_(None),
+                Signal.created_at >= now - time_window,
+                Signal.created_at <= now + time_window,
+                # Exclude the exact message we just checked
+                Signal.message_id != message_id
+            )
+        )
+        
+        # Order by creation date to get most recent first
+        query = query.order_by(Signal.created_at.desc())
+        
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none() 

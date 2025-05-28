@@ -1,24 +1,21 @@
-"""Signal queue module for buffering and managing trading signals.
+"""Signal queue module for managing signal processing order.
 
 This module implements the SignalQueue class which is responsible for:
-- Buffering signals in a FIFO queue
+- Managing processing order of signals
 - Handling signal priorities
-- Managing signal expiration
-- Providing thread-safe signal processing
+- Flow control for signal processing
+- Retry management
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Dict, List, Optional, Tuple, Deque
+from typing import Dict, Optional, Deque
 import asyncio
-import heapq
 from collections import deque
+from uuid import UUID
 
 import structlog
-
-from .signal_parser import TradingSignal
-from .signal_validator import SignalValidator, ValidationResult
 
 logger = structlog.get_logger(__name__)
 
@@ -29,47 +26,42 @@ class SignalPriority(Enum):
     LOW = 2     # Delayed execution (e.g., pending orders)
 
 @dataclass
-class QueuedSignal:
-    """Represents a signal in the queue with priority and metadata."""
-    signal: TradingSignal
+class QueueItem:
+    """Represents a signal in the processing queue."""
+    signal_id: UUID
     priority: SignalPriority
     queued_at: datetime
-    validation_result: ValidationResult
     retry_count: int = 0
     last_retry: Optional[datetime] = None
 
 class SignalQueue:
-    """Queue for managing trading signals with priority and expiration.
+    """Queue for managing signal processing order with priority.
     
-    This class implements a priority queue for trading signals with the following features:
+    This class implements a priority queue for signal processing with:
     - FIFO ordering within priority levels
-    - Signal expiration management
-    - Retry handling for failed signals
-    - Thread-safe operations
+    - Flow control for processing rate
+    - Retry tracking
     """
     
     def __init__(
         self,
         max_queue_size: int = 1000,
         max_retries: int = 3,
-        retry_delay_minutes: int = 5,
-        signal_expiry_minutes: int = 30
+        retry_delay_minutes: int = 5
     ):
         """Initialize the signal queue.
         
         Args:
-            max_queue_size: Maximum number of signals in the queue
-            max_retries: Maximum number of retry attempts for failed signals
-            retry_delay_minutes: Delay between retry attempts in minutes
-            signal_expiry_minutes: Time after which signals expire
+            max_queue_size: Maximum number of signals in queue
+            max_retries: Maximum number of retry attempts
+            retry_delay_minutes: Delay between retries in minutes
         """
         self.max_queue_size = max_queue_size
         self.max_retries = max_retries
         self.retry_delay = timedelta(minutes=retry_delay_minutes)
-        self.signal_expiry = timedelta(minutes=signal_expiry_minutes)
         
-        # Priority queues for each priority level
-        self.queues: Dict[SignalPriority, Deque[QueuedSignal]] = {
+        # Priority queues
+        self.queues: Dict[SignalPriority, Deque[QueueItem]] = {
             priority: deque(maxlen=max_queue_size)
             for priority in SignalPriority
         }
@@ -78,198 +70,109 @@ class SignalQueue:
         self._lock = asyncio.Lock()
         
         # Statistics
-        self.total_signals_queued = 0
-        self.total_signals_processed = 0
-        self.total_signals_expired = 0
-        self.total_signals_failed = 0
+        self.total_queued = 0
+        self.total_processed = 0
+        self.total_retried = 0
         
     async def enqueue(
         self,
-        signal: TradingSignal,
-        priority: SignalPriority = SignalPriority.NORMAL,
-        validation_result: Optional[ValidationResult] = None
+        signal_id: UUID,
+        priority: SignalPriority = SignalPriority.NORMAL
     ) -> bool:
-        """Add a signal to the queue.
+        """Add a signal to the processing queue.
         
         Args:
-            signal: The trading signal to queue
-            priority: Priority level for the signal
-            validation_result: Optional validation result if signal was pre-validated
+            signal_id: UUID of the signal in the database
+            priority: Processing priority level
             
         Returns:
-            bool indicating if the signal was successfully queued
+            bool indicating if signal was queued
         """
         async with self._lock:
-            # Check if queue is full
             if self._is_queue_full():
                 logger.warning(
                     "queue_full",
-                    max_size=self.max_queue_size,
-                    signal_symbol=signal.symbol
+                    max_size=self.max_queue_size
                 )
                 return False
                 
-            # Create queued signal
-            queued_signal = QueuedSignal(
-                signal=signal,
+            queue_item = QueueItem(
+                signal_id=signal_id,
                 priority=priority,
-                queued_at=datetime.now(),
-                validation_result=validation_result or ValidationResult(True, "Pending validation")
+                queued_at=datetime.now(tz=timezone.utc)
             )
             
-            # Add to appropriate priority queue
-            self.queues[priority].append(queued_signal)
-            self.total_signals_queued += 1
+            self.queues[priority].append(queue_item)
+            self.total_queued += 1
             
             logger.info(
                 "signal_queued",
-                symbol=signal.symbol,
+                signal_id=signal_id,
                 priority=priority.name,
                 queue_size=self._get_total_queue_size()
             )
             
             return True
             
-    async def dequeue(self) -> Optional[QueuedSignal]:
+    async def dequeue(self) -> Optional[QueueItem]:
         """Get the next signal to process.
         
         Returns:
-            The next QueuedSignal to process, or None if queue is empty
+            QueueItem if available, None if queue empty
         """
         async with self._lock:
-            # Try each priority queue in order
             for priority in SignalPriority:
                 if self.queues[priority]:
-                    queued_signal = self.queues[priority].popleft()
-                    
-                    # Check if signal has expired
-                    if self._is_signal_expired(queued_signal):
-                        self.total_signals_expired += 1
-                        logger.info(
-                            "signal_expired",
-                            symbol=queued_signal.signal.symbol,
-                            age_minutes=(datetime.now() - queued_signal.queued_at).total_seconds() / 60
-                        )
-                        continue
-                        
-                    self.total_signals_processed += 1
-                    return queued_signal
-                    
+                    item = self.queues[priority].popleft()
+                    self.total_processed += 1
+                    return item
             return None
             
-    async def retry_signal(self, queued_signal: QueuedSignal) -> bool:
-        """Retry a failed signal.
+    async def retry(
+        self,
+        signal_id: UUID,
+        priority: SignalPriority
+    ) -> bool:
+        """Add a signal back to queue for retry.
         
         Args:
-            queued_signal: The signal to retry
+            signal_id: UUID of the signal to retry
+            priority: Priority level for retry
             
         Returns:
-            bool indicating if the signal was successfully requeued
+            bool indicating if signal was requeued
         """
         async with self._lock:
-            # Check if max retries reached
-            if queued_signal.retry_count >= self.max_retries:
-                self.total_signals_failed += 1
-                logger.warning(
-                    "max_retries_reached",
-                    symbol=queued_signal.signal.symbol,
-                    retry_count=queued_signal.retry_count
-                )
-                return False
-                
-            # Update retry information
-            queued_signal.retry_count += 1
-            queued_signal.last_retry = datetime.now()
-            
-            # Requeue with same priority
-            return await self.enqueue(
-                queued_signal.signal,
-                queued_signal.priority,
-                queued_signal.validation_result
-            )
+            self.total_retried += 1
+            return await self.enqueue(signal_id, priority)
             
     def _is_queue_full(self) -> bool:
-        """Check if the queue is full.
-        
-        Returns:
-            bool indicating if queue is at capacity
-        """
+        """Check if queue is at capacity."""
         return self._get_total_queue_size() >= self.max_queue_size
         
     def _get_total_queue_size(self) -> int:
-        """Get the total number of signals in all queues.
-        
-        Returns:
-            Total number of signals in the queue
-        """
+        """Get total number of signals in all queues."""
         return sum(len(queue) for queue in self.queues.values())
         
-    def _is_signal_expired(self, queued_signal: QueuedSignal) -> bool:
-        """Check if a signal has expired.
-        
-        Args:
-            queued_signal: The signal to check
-            
-        Returns:
-            bool indicating if signal has expired
-        """
-        age = datetime.now() - queued_signal.queued_at
-        return age > self.signal_expiry
-        
     def get_queue_stats(self) -> Dict[str, any]:
-        """Get current queue statistics.
-        
-        Returns:
-            Dictionary containing queue statistics
-        """
+        """Get current queue statistics."""
         return {
-            "total_queued": self.total_signals_queued,
-            "total_processed": self.total_signals_processed,
-            "total_expired": self.total_signals_expired,
-            "total_failed": self.total_signals_failed,
-            "current_queue_size": self._get_total_queue_size(),
-            "queue_sizes_by_priority": {
+            "total_queued": self.total_queued,
+            "total_processed": self.total_processed,
+            "total_retried": self.total_retried,
+            "current_size": self._get_total_queue_size(),
+            "sizes_by_priority": {
                 priority.name: len(queue)
                 for priority, queue in self.queues.items()
             }
         }
         
-    async def clear_expired_signals(self) -> int:
-        """Clear all expired signals from the queue.
-        
-        Returns:
-            Number of signals cleared
-        """
-        async with self._lock:
-            cleared_count = 0
-            now = datetime.now()
-            
-            for priority in SignalPriority:
-                # Keep only non-expired signals
-                original_size = len(self.queues[priority])
-                self.queues[priority] = deque(
-                    (signal for signal in self.queues[priority]
-                     if not self._is_signal_expired(signal)),
-                    maxlen=self.max_queue_size
-                )
-                cleared_count += original_size - len(self.queues[priority])
-                
-            if cleared_count > 0:
-                logger.info(
-                    "cleared_expired_signals",
-                    count=cleared_count,
-                    remaining=self._get_total_queue_size()
-                )
-                
-            return cleared_count 
-
     async def clear(self) -> None:
-        """Clear all signals from the queue and reset statistics."""
+        """Clear all items from queue and reset statistics."""
         async with self._lock:
             for queue in self.queues.values():
                 queue.clear()
-            self.total_signals_queued = 0
-            self.total_signals_processed = 0
-            self.total_signals_expired = 0
-            self.total_signals_failed = 0
-            logger.info("signal_queue_cleared") 
+            self.total_queued = 0
+            self.total_processed = 0
+            self.total_retried = 0
+            logger.info("queue_cleared") 

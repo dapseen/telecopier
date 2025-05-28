@@ -35,17 +35,17 @@ class StatisticsRepository(BaseRepository[DailyStatistics]):
         """
         super().__init__(DailyStatistics, session)
         
-    async def get_by_date(self, date: date) -> Optional[DailyStatistics]:
+    async def get_by_date(self, trading_date: date) -> Optional[DailyStatistics]:
         """Get statistics by date.
         
         Args:
-            date: Statistics date
+            trading_date: Statistics date
             
         Returns:
             Optional[DailyStatistics]: Statistics if found
         """
         return await self.get_one_by_filters(
-            filters={"date": date}
+            filters={"trading_date": trading_date}
         )
         
     async def get_date_range(
@@ -64,15 +64,15 @@ class StatisticsRepository(BaseRepository[DailyStatistics]):
         """
         query = self._build_query(
             filters={
-                "date": and_(
-                    DailyStatistics.date >= start_date,
-                    DailyStatistics.date <= end_date
+                "trading_date": and_(
+                    DailyStatistics.trading_date >= start_date,
+                    DailyStatistics.trading_date <= end_date
                 )
             }
         )
         
         # Order by date
-        query = query.order_by(DailyStatistics.date)
+        query = query.order_by(DailyStatistics.trading_date)
         
         return await self.get_multi(query=query)
         
@@ -113,9 +113,9 @@ class StatisticsRepository(BaseRepository[DailyStatistics]):
         
         # Add date range
         if start_date:
-            query = query.where(DailyStatistics.date >= start_date)
+            query = query.where(DailyStatistics.trading_date >= start_date)
         if end_date:
-            query = query.where(DailyStatistics.date <= end_date)
+            query = query.where(DailyStatistics.trading_date <= end_date)
             
         # Get statistics
         result = await self.session.execute(query)
@@ -151,7 +151,7 @@ class StatisticsRepository(BaseRepository[DailyStatistics]):
         peak = 0.0
         max_drawdown = 0.0
         
-        for stat in sorted(stats, key=lambda s: s.date):
+        for stat in sorted(stats, key=lambda s: s.trading_date):
             balance += stat.net_profit
             peak = max(peak, balance)
             drawdown = peak - balance
@@ -229,9 +229,9 @@ class StatisticsRepository(BaseRepository[DailyStatistics]):
         
         # Add date range
         if start_date:
-            query = query.where(DailyStatistics.date >= start_date)
+            query = query.where(DailyStatistics.trading_date >= start_date)
         if end_date:
-            query = query.where(DailyStatistics.date <= end_date)
+            query = query.where(DailyStatistics.trading_date <= end_date)
             
         # Get statistics
         result = await self.session.execute(query)
@@ -298,7 +298,7 @@ class StatisticsRepository(BaseRepository[DailyStatistics]):
         """
         # Build query
         query = select(DailyStatistics).where(
-            DailyStatistics.date <= date.today() - max_age
+            DailyStatistics.trading_date <= date.today() - max_age
         )
         
         # Get statistics to clean up

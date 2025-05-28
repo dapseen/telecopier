@@ -218,6 +218,20 @@ class SignalMonitor:
             )
             raise
 
+    async def start(self) -> None:
+        """Start the Telegram client and connect."""
+        await self.connect()
+
+    async def stop(self) -> None:
+        """Stop the Telegram client and disconnect."""
+        await self.disconnect()
+
+    async def run_forever(self) -> None:
+        """Run the client forever until interrupted."""
+        if not self.client:
+            raise RuntimeError("Client not initialized")
+        await self.client.run_until_disconnected()
+
     async def connect(self) -> None:
         """Establish connection to Telegram API with retry logic."""
         if self._is_connected:
@@ -254,7 +268,14 @@ class SignalMonitor:
                 # Add message handler after successful connection
                 @self.client.on(events.NewMessage(chats=self._channel_entity))
                 async def handle_new_message(event: events.NewMessage.Event) -> None:
-                    await self._handle_message(event.message)
+                    try:
+                        await self._handle_message(event.message)
+                    except Exception as e:
+                        logger.error(
+                            "event_handler_error",
+                            error=str(e),
+                            message_id=event.message.id if event.message else "unknown"
+                        )
 
                 self._is_connected = True
                 self._connection_attempts = 0
@@ -305,9 +326,15 @@ class SignalMonitor:
             message_date = message.date.isoformat() if message.date else None
             edit_date = message.edit_date.isoformat() if message.edit_date else None
 
+            # Extract channel name if available
+            channel_name = None
+            if message.chat:
+                channel_name = getattr(message.chat, 'title', None) or getattr(message.chat, 'username', None)
+
             message_data = {
                 "message_id": message.id,
                 "chat_id": message.chat_id,
+                "channel_name": channel_name or "default",
                 "text": message.text,
                 "date": message_date,
                 "edit_date": edit_date,
@@ -317,16 +344,31 @@ class SignalMonitor:
             logger.debug("message_received", **message_data)
 
             if self.message_callback:
-                await self.message_callback(message_data)
+                # Create a task for the callback to prevent blocking
+                asyncio.create_task(self._execute_callback(message_data))
 
         except Exception as e:
             logger.error(
                 "message_handling_error",
                 error=str(e),
-                message_id=message.id,
+                message_id=getattr(message, 'id', 'unknown'),
                 message_text=getattr(message, "text", None),
             )
-            raise
+
+    async def _execute_callback(self, message_data: Dict[str, Any]) -> None:
+        """Execute the message callback in a safe manner.
+
+        Args:
+            message_data: The message data to pass to the callback
+        """
+        try:
+            await self.message_callback(message_data)
+        except Exception as e:
+            logger.error(
+                "callback_execution_error",
+                error=str(e),
+                message_id=message_data.get("message_id", "unknown")
+            )
 
     @property
     def is_connected(self) -> bool:

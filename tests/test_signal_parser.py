@@ -1,190 +1,151 @@
 """Tests for the signal parser module.
 
-This module contains tests for both the Lark-based parser and regex fallback
-functionality in the SignalParser class.
+This module contains tests for the GPT-3.5 based signal parser.
 """
 
+import os
 import pytest
-from datetime import datetime
+from unittest.mock import AsyncMock, patch
 from src.telegram.signal_parser import SignalParser, TradingSignal, TakeProfit
+from src.common.types import SignalDirection, SignalType
 
 @pytest.fixture
-def parser():
-    """Create a SignalParser instance with test symbols."""
-    return SignalParser(valid_symbols={'XAUUSD', 'EURUSD', 'GBPUSD'})
+def mock_openai():
+    """Mock OpenAI client responses."""
+    with patch('src.telegram.signal_parser.AsyncOpenAI') as mock:
+        # Create mock completion response
+        mock_response = AsyncMock()
+        mock_response.choices = [
+            AsyncMock(
+                message=AsyncMock(
+                    content='''{
+                        "symbol": "XAUUSD",
+                        "direction": "BUY",
+                        "entry": 3232.0,
+                        "sl": 3220.0,
+                        "take_profits": {
+                            "TP1": 3235.0,
+                            "TP2": 3239.0,
+                            "TP3": 3255.0,
+                            "TP4": 3333.5
+                        },
+                        "notes": "Max 0.25%"
+                    }'''
+                )
+            )
+        ]
+        mock.return_value.chat.completions.create = AsyncMock(return_value=mock_response)
+        yield mock
 
 @pytest.fixture
-def sample_signals():
-    """Return a list of sample trading signals to test parsing."""
-    return [
-        # Sample 1: Standard format
-        """
+def parser(mock_openai):
+    """Create a SignalParser instance with test configuration."""
+    return SignalParser(
+        api_key="test_key",
+        valid_symbols={'XAUUSD', 'EURUSD', 'GBPUSD'},
+        model="gpt-3.5-turbo",
+        temperature=0.1,
+        max_tokens=300
+    )
+
+@pytest.mark.asyncio
+async def test_parser_initialization():
+    """Test parser initialization with API key."""
+    # Test valid initialization
+    parser = SignalParser(
+        api_key="test_key",
+        valid_symbols={'XAUUSD'}
+    )
+    assert parser.api_key == "test_key"
+    assert parser.valid_symbols == {'XAUUSD'}
+    assert parser.model == "gpt-3.5-turbo"
+    
+    # Test missing API key
+    with pytest.raises(ValueError):
+        SignalParser(api_key="")
+
+@pytest.mark.asyncio
+async def test_parse_valid_signal(parser, mock_openai):
+    """Test parsing of a valid trading signal."""
+    message = """
         XAUUSD buy now 
         Enter 3232
         SL 3220
         TP1 3235
         TP2 3239
         TP3 3255
-        TP4 3333.50 (1000)
+    TP4 3333.50
         
         Max 0.25%
-        """,
-        
-        # Sample 2: Alternative format
-        """
-        XAUUSD Buy now 
-        Enter 3187
-        SL 3176 (100pips) 
-        TP1 3190
-        TP2 3195
-        TP3 3200
-        TP4 3205
-        """,
-        
-        # Sample 3: Mixed case and comments
-        """
-        XAUUSD buy now
-        Enter 3173
-        SL 3163 (100)
-        TP1 3177
-        Tp2 3180
-        Tp3 3190
-        TP4 3373 (2000)
-        
-        Max 0.25% risk
-        Don't let one trade ruin weeks of profits
-        
-        TP5 3477
-        """,
-        
-        # Sample 4: Invalid symbol
-        """
-        INVALID buy now
-        Enter 100
-        SL 90
-        TP1 110
-        """,
-        
-        # Sample 5: Missing components
-        """
-        XAUUSD buy now
-        Enter 3173
-        SL 3163
-        """,
-        
-        # Sample 6: Invalid price relationships
-        """
-        XAUUSD buy now
-        Enter 3173
-        SL 3183  # SL above entry
-        TP1 3170  # TP below entry
-        """
-    ]
-
-def test_lark_parser_initialization(parser):
-    """Test that Lark parser is properly initialized."""
-    assert parser.parser is not None
-    assert parser.transformer is not None
-    assert parser.valid_symbols == {'XAUUSD', 'EURUSD', 'GBPUSD'}
-
-def test_parse_valid_signals(parser, sample_signals):
-    """Test parsing of valid trading signals."""
-    # Test first three samples which should parse successfully
-    for i, message in enumerate(sample_signals[:3]):
-        signal = parser.parse(message)
-        assert signal is not None, f"Failed to parse sample {i+1}"
-        assert isinstance(signal, TradingSignal)
-        
-        # Verify basic structure
-        assert signal.symbol == "XAUUSD"
-        assert signal.direction == "buy"
-        assert isinstance(signal.entry_price, float)
-        assert isinstance(signal.stop_loss, float)
-        assert isinstance(signal.take_profits, list)
-        assert all(isinstance(tp, TakeProfit) for tp in signal.take_profits)
-        assert isinstance(signal.timestamp, datetime)
-        assert isinstance(signal.raw_message, str)
-        assert 0.0 <= signal.confidence_score <= 1.0
-        
-        # Verify specific values for first sample
-        if i == 0:
-            assert signal.entry_price == 3232.0
-            assert signal.stop_loss == 3220.0
-            assert len(signal.take_profits) == 4
-            assert signal.take_profits[0].price == 3235.0
-            assert signal.take_profits[-1].price == 3333.50
-            assert signal.take_profits[-1].pips == 1000
-            assert "Max 0.25%" in signal.additional_notes
-
-def test_parse_invalid_signals(parser, sample_signals):
-    """Test parsing of invalid trading signals."""
-    # Test samples 4-6 which should fail parsing
-    for i, message in enumerate(sample_signals[3:], 4):
-        signal = parser.parse(message)
-        if i == 4:  # Invalid symbol
-            assert signal is None
-        elif i == 5:  # Missing components
-            assert signal is None
-        elif i == 6:  # Invalid price relationships
-            assert signal is not None  # Should parse but with low confidence
-            assert signal.confidence_score < 0.8
-
-def test_regex_fallback(parser, sample_signals):
-    """Test that regex fallback works when Lark parser fails."""
-    # Temporarily disable Lark parser
-    original_parser = parser.parser
-    parser.parser = None
+    """
     
-    try:
-        # Should still parse using regex
-        signal = parser.parse(sample_signals[0])
-        assert signal is not None
-        assert isinstance(signal, TradingSignal)
-        assert signal.symbol == "XAUUSD"
-        assert signal.direction == "buy"
-    finally:
-        # Restore Lark parser
-        parser.parser = original_parser
-
-def test_confidence_scoring(parser, sample_signals):
-    """Test confidence scoring for different signal qualities."""
-    # Test high confidence signal
-    signal = parser.parse(sample_signals[0])
+    signal = await parser.parse(
+        message=message,
+        message_id=123,
+        chat_id=456,
+        channel_name="test_channel"
+    )
+    
     assert signal is not None
-    assert signal.confidence_score > 0.9
-    
-    # Test signal with invalid price relationships
-    signal = parser.parse(sample_signals[5])
-    assert signal is not None
-    assert signal.confidence_score < 0.8
-    
-    # Test signal with missing components
-    signal = parser.parse(sample_signals[4])
-    assert signal is None  # Should fail parsing entirely
+    assert isinstance(signal, TradingSignal)
+    assert signal.symbol == "XAUUSD"
+    assert signal.direction == SignalDirection.BUY
+    assert signal.entry_price == 3232.0
+    assert signal.stop_loss == 3220.0
+    assert len(signal.take_profits) == 4
+    assert signal.take_profits[0].price == 3235.0
+    assert signal.take_profits[-1].price == 3333.5
+    assert signal.message_id == 123
+    assert signal.chat_id == 456
+    assert signal.channel_name == "test_channel"
+    assert signal.confidence_score == 0.95
 
-def test_additional_notes(parser, sample_signals):
-    """Test extraction of additional notes and context."""
-    # Test signal with risk management note
-    signal = parser.parse(sample_signals[0])
-    assert signal is not None
-    assert "Max 0.25%" in signal.additional_notes
+@pytest.mark.asyncio
+async def test_parse_invalid_signal(parser, mock_openai):
+    """Test parsing of invalid signals."""
+    # Mock OpenAI to return null for invalid signal
+    mock_openai.return_value.chat.completions.create.return_value.choices[0].message.content = "null"
     
-    # Test signal with multiple comments
-    signal = parser.parse(sample_signals[2])
-    assert signal is not None
-    assert "Max 0.25% risk" in signal.additional_notes
-    assert "Don't let one trade ruin weeks of profits" in signal.additional_notes
+    message = "This is not a trading signal"
+    signal = await parser.parse(message)
+    assert signal is None
 
-def test_take_profit_ordering(parser, sample_signals):
-    """Test that take profit levels are properly ordered."""
-    signal = parser.parse(sample_signals[2])
-    assert signal is not None
-    assert len(signal.take_profits) == 5
+@pytest.mark.asyncio
+async def test_parse_invalid_symbol(parser, mock_openai):
+    """Test parsing signal with invalid symbol."""
+    # Mock OpenAI to return invalid symbol
+    mock_openai.return_value.chat.completions.create.return_value.choices[0].message.content = '''{
+        "symbol": "INVALID",
+        "direction": "BUY",
+        "entry": 100.0,
+        "sl": 90.0
+    }'''
     
-    # Verify levels are in order
-    levels = [tp.level for tp in signal.take_profits]
-    assert levels == sorted(levels)
+    message = "INVALID buy now Enter 100 SL 90"
+    signal = await parser.parse(message)
+    assert signal is None
+
+@pytest.mark.asyncio
+async def test_parse_invalid_direction(parser, mock_openai):
+    """Test parsing signal with invalid direction."""
+    # Mock OpenAI to return invalid direction
+    mock_openai.return_value.chat.completions.create.return_value.choices[0].message.content = '''{
+        "symbol": "XAUUSD",
+        "direction": "INVALID",
+        "entry": 3232.0,
+        "sl": 3220.0
+    }'''
     
-    # Verify prices are in order for buy signal
-    prices = [tp.price for tp in signal.take_profits]
-    assert prices == sorted(prices)  # For buy signal, prices should increase 
+    message = "XAUUSD invalid_direction now Enter 3232 SL 3220"
+    signal = await parser.parse(message)
+    assert signal is None
+
+@pytest.mark.asyncio
+async def test_openai_error_handling(parser, mock_openai):
+    """Test handling of OpenAI API errors."""
+    # Mock OpenAI to raise an exception
+    mock_openai.return_value.chat.completions.create.side_effect = Exception("API Error")
+    
+    message = "XAUUSD buy now Enter 3232 SL 3220"
+    signal = await parser.parse(message)
+    assert signal is None 

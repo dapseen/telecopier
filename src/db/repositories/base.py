@@ -7,7 +7,7 @@ This module provides:
 - Error handling
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import (
     Any,
     Dict,
@@ -20,7 +20,7 @@ from typing import (
 )
 from uuid import UUID
 
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
 
@@ -66,11 +66,16 @@ class BaseRepository(Generic[ModelType]):
         Returns:
             ModelType: Created model instance
         """
-        db_obj = self.model(**obj_in)
-        self.session.add(db_obj)
-        await self.session.flush()
-        await self.session.refresh(db_obj)
-        return db_obj
+        try:
+            db_obj = self.model(**obj_in)
+            self.session.add(db_obj)
+            await self.session.flush()
+            await self.session.commit()  # Commit the transaction
+            await self.session.refresh(db_obj)
+            return db_obj
+        except Exception as e:
+            await self.session.rollback()  # Rollback on error
+            raise
         
     async def get(self, id: UUID) -> Optional[ModelType]:
         """Get record by ID.
@@ -131,7 +136,7 @@ class BaseRepository(Generic[ModelType]):
             if hasattr(db_obj, field):
                 setattr(db_obj, field, update_data[field])
                 
-        db_obj.updated_at = datetime.now(timezone=True)
+        db_obj.updated_at = datetime.now(tz=timezone.utc)
         await self.session.flush()
         await self.session.refresh(db_obj)
         return db_obj

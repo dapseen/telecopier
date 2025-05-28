@@ -11,7 +11,7 @@ from typing import Dict, Any
 
 import structlog
 from dotenv import load_dotenv
-from telegram import SignalMonitor
+from src.telegram.telegram_client import SignalMonitor
 
 # Configure logging
 structlog.configure(

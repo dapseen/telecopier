@@ -68,59 +68,81 @@ class SignalParserTester:
         # Add basic signal information
         table.add_row("Direction", signal.direction.upper())
         table.add_row("Entry Price", str(signal.entry_price))
-        table.add_row("Stop Loss", f"{signal.stop_loss} ({signal.stop_loss_pips} pips)")
+        if signal.stop_loss:
+            table.add_row("Stop Loss", f"{signal.stop_loss} ({signal.stop_loss_pips} pips)")
         table.add_row("Confidence", f"{signal.confidence_score:.2f}")
         table.add_row("Message Time", message_date.strftime("%Y-%m-%d %H:%M:%S"))
         
         # Add take profit levels
-        tp_table = Table(show_header=False, box=None)
-        for tp in signal.take_profits:
-            tp_info = f"TP{tp.level}: {tp.price}"
-            if tp.pips:
-                tp_info += f" ({tp.pips} pips)"
-            tp_table.add_row(tp_info)
-            
-        table.add_row("Take Profits", tp_table)
+        if signal.take_profits:
+            tp_table = Table(show_header=False, box=None)
+            for tp in signal.take_profits:
+                tp_table.add_row(f"TP{tp.level}", str(tp.price))
+            table.add_row("Take Profits", tp_table)
         
-        # Add additional notes if any
+        # Add notes if present
         if signal.additional_notes:
             table.add_row("Notes", signal.additional_notes)
             
         # Display the table
         self.console.print(table)
-        self.console.print()  # Add spacing
+        self.console.print()
 
-async def message_handler(message_data: Dict[str, Any], tester: SignalParserTester) -> None:
-    """Handle incoming messages from Telegram and parse them for trading signals.
-    
-    Args:
-        message_data: The message data from Telegram
-        tester: The SignalParserTester instance
-    """
-    tester.messages_analyzed += 1
-    
-    # Log the received message
-    logger.info(
-        "received_message",
-        message_id=message_data["message_id"],
-        text=message_data["text"],
-        date=message_data["date"],
-    )
-    
-    # Try to parse the message as a trading signal
-    signal = tester.parser.parse(message_data["text"])
-    if signal:
-        tester.signals_found += 1
-        tester.display_signal(signal, message_data["date"])
+    async def process_message(self, message_data: Dict[str, Any]) -> None:
+        """Process a message by parsing it and displaying the result if it's a signal.
         
-        # Log the parsed signal
+        Args:
+            message_data: The message data from Telegram
+        """
+        try:
+            # Try to parse the message as a trading signal
+            signal = await self.parser.parse(
+                message=message_data["text"],
+                message_id=message_data["message_id"],
+                chat_id=message_data["chat_id"],
+                channel_name=message_data["channel_name"]
+            )
+            
+            if signal:
+                self.signals_found += 1
+                self.display_signal(signal, message_data["date"])
+                
+                # Log the parsed signal
+                logger.info(
+                    "parsed_signal",
+                    message_id=message_data["message_id"],
+                    symbol=signal.symbol,
+                    direction=signal.direction,
+                    confidence=signal.confidence_score,
+                )
+        except Exception as e:
+            logger.error(
+                "message_handling_failed",
+                error=str(e),
+                message_id=message_data.get("message_id", "unknown"),
+            )
+
+    async def handle_message(self, message_data: Dict[str, Any]) -> None:
+        """Handle incoming messages from Telegram.
+        
+        This is the callback that will be passed to the SignalMonitor.
+        It increments the message counter and processes the message.
+        
+        Args:
+            message_data: The message data from Telegram
+        """
+        self.messages_analyzed += 1
+        
+        # Log the received message
         logger.info(
-            "parsed_signal",
-            message_id=message_data["message_id"],
-            symbol=signal.symbol,
-            direction=signal.direction,
-            confidence=signal.confidence_score,
+            "received_message",
+            message_id=message_data.get("message_id", "unknown"),
+            text=message_data.get("text", ""),
+            date=message_data.get("date"),
         )
+        
+        # Process the message in a new task to prevent blocking
+        await self.process_message(message_data)
 
 async def main() -> None:
     """Main function to test the signal parser with live messages."""
@@ -131,70 +153,46 @@ async def main() -> None:
     api_id = os.getenv("TELEGRAM_API_ID")
     api_hash = os.getenv("TELEGRAM_API_HASH")
     channel_id = os.getenv("TELEGRAM_CHANNEL_ID")
-    phone = os.getenv("TELEGRAM_PHONE")  # Add phone number
+    phone = os.getenv("TELEGRAM_PHONE")
+    openai_key = os.getenv("OPENAI_API_KEY")
     
     # Validate required credentials
-    if not all([api_id, api_hash, channel_id, phone]):  # Add phone to validation
+    if not all([api_id, api_hash, channel_id, phone, openai_key]):
         logger.error("missing_credentials")
-        print("\nError: Missing required Telegram credentials!")
+        print("\nError: Missing required credentials!")
         print("Please set the following environment variables:")
         print("  - TELEGRAM_API_ID")
         print("  - TELEGRAM_API_HASH")
         print("  - TELEGRAM_CHANNEL_ID")
-        print("  - TELEGRAM_PHONE")  # Add phone to message
-        print("\nYou can get these from https://my.telegram.org/apps")
+        print("  - TELEGRAM_PHONE")
+        print("  - OPENAI_API_KEY")
+        print("\nYou can get Telegram credentials from https://my.telegram.org/apps")
+        print("Get your OpenAI API key from https://platform.openai.com/api-keys")
         return
     
     # Initialize the signal parser tester
     tester = SignalParserTester()
-    
-    # Create message handler with the tester instance
-    async def handler(message_data: Dict[str, Any]) -> None:
-        await message_handler(message_data, tester)
     
     # Create and start the client
     monitor = SignalMonitor(
         api_id=api_id,
         api_hash=api_hash,
         channel_id=channel_id,
-        message_callback=handler,
-        phone=phone,  # Add phone number
+        message_callback=tester.handle_message,
+        phone=phone,
     )
     
     try:
-        print("\nConnecting to Telegram...")
-        await monitor.connect()
-        print("Connected successfully!")
-        print(f"Monitoring channel: {channel_id}")
-        print("\nPress Ctrl+C to stop\n")
-        
-        # Keep the script running
-        while True:
-            await asyncio.sleep(1)
-            
+        await monitor.start()
+        print("\nMonitoring Telegram channel for trading signals...")
+        print("Press Ctrl+C to stop\n")
+        await monitor.run_forever()
     except KeyboardInterrupt:
-        print("\nStopping...")
-    except Exception as e:
-        logger.error("error", error=str(e))
-        raise
+        print("\nStopping signal monitor...")
     finally:
-        # Print summary before disconnecting
-        if tester.messages_analyzed > 0:
-            success_rate = (tester.signals_found / tester.messages_analyzed) * 100
-            print("\n=== Analysis Summary ===")
-            print(f"Messages analyzed: {tester.messages_analyzed}")
-            print(f"Signals found: {tester.signals_found}")
-            print(f"Success rate: {success_rate:.1f}%")
-            print("======================\n")
-        
-        await monitor.disconnect()
-        print("Disconnected")
+        await monitor.stop()
+        print(f"\nProcessed {tester.messages_analyzed} messages")
+        print(f"Found {tester.signals_found} trading signals")
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\nStopped by user")
-    except Exception as e:
-        print(f"\nError: {str(e)}")
-        raise 
+    asyncio.run(main()) 

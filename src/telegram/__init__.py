@@ -1,24 +1,26 @@
-"""Telegram signal processing module.
+"""Telegram module for signal processing and management.
 
-This module handles the parsing and processing of trading signals from
-Telegram messages.
+This module provides functionality for:
+- Parsing trading signals from Telegram messages
+- Managing signal queue and persistence
+- Validating and processing signals
 """
 
-from .models import TradingSignal, TakeProfit
-from .signal_parser import SignalParser
-
-# Import these here to avoid circular import issues
+from .signal_parser import SignalParser, TradingSignal, TakeProfit
+from .signal_queue import SignalQueue, SignalPriority, QueueItem
 from .signal_validator import SignalValidator, ValidationResult
-from .signal_queue import SignalQueue, SignalPriority
-from .telegram_client.client import SignalMonitor
+from .signal_persistence import SignalPersistence
+from .telegram_client import SignalMonitor
 
 __all__ = [
+    'SignalParser',
     'TradingSignal',
     'TakeProfit',
-    'SignalParser',
-    'SignalValidator',
-    'ValidationResult',
     'SignalQueue',
     'SignalPriority',
-    'SignalMonitor',
+    'QueueItem',
+    'SignalValidator',
+    'ValidationResult',
+    'SignalPersistence',
+    'SignalMonitor'
 ] 

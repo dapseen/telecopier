@@ -3,7 +3,7 @@
 # Risk Management Parameters
 risk:
   # Position Sizing
-  risk_per_trade_pct: 0.25  # Percentage of account balance to risk per trade
+  risk_per_trade_pct: 0.02  # Percentage of account balance to risk per trade
   max_position_size_pct: 0.02  # Maximum position size as percentage of account
   max_open_positions: 2  # Maximum number of open positions allowed
   
@@ -114,5 +114,14 @@ mt5:
   retry_delay_seconds: 5
   max_retries: 3
   health_check_interval_seconds: 30
+
+# OpenAI Configuration
+openai:
+  model: "gpt-3.5-turbo"
+  temperature: 0.0  # Use deterministic outputs
+  max_tokens: 1000
+  timeout_seconds: 30
+  retry_attempts: 3
+  retry_delay_seconds: 1
 
 

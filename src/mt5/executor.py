@@ -9,7 +9,7 @@ This module implements the TradeExecutor class which handles:
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 from .connection import MT5Connection
 from .position_manager import RiskConfig, PositionManager
+from src.common.types import SignalDirection
 
 logger = structlog.get_logger(__name__)
 
@@ -66,6 +67,7 @@ class TradeExecutor:
         self.position_manager = PositionManager(connection, risk_config)
         
     async def execute_signal(self, signal: "TradingSignal") -> TradeResult:
+        logger.info("Executing signal", signal=signal)
         """Execute a trading signal.
         
         Args:
@@ -219,26 +221,25 @@ class TradeExecutor:
                 )
                 return False
                 
-            # Validate stop loss (case-insensitive)
-            direction = signal.direction.upper()
-            if direction == "BUY":
+            # Validate stop loss (using SignalDirection enum)
+            if signal.direction == SignalDirection.BUY:
                 if signal.stop_loss >= signal.entry_price:
                     logger.warning(
                         "invalid_buy_sl",
                         symbol=signal.symbol,
                         entry=signal.entry_price,
                         sl=signal.stop_loss,
-                        direction=direction
+                        direction=signal.direction
                     )
                     return False
-            elif direction == "SELL":
+            elif signal.direction == SignalDirection.SELL:
                 if signal.stop_loss <= signal.entry_price:
                     logger.warning(
                         "invalid_sell_sl",
                         symbol=signal.symbol,
                         entry=signal.entry_price,
                         sl=signal.stop_loss,
-                        direction=direction
+                        direction=signal.direction
                     )
                     return False
             else:
@@ -254,51 +255,10 @@ class TradeExecutor:
                 logger.warning(
                     "missing_take_profits",
                     symbol=signal.symbol,
-                    direction=direction
+                    direction=signal.direction
                 )
                 return False
                 
-            for tp in signal.take_profits:
-                if tp.price <= 0:
-                    logger.warning(
-                        "invalid_tp_price",
-                        symbol=signal.symbol,
-                        tp_level=tp.level,
-                        tp_price=tp.price,
-                        direction=direction
-                    )
-                    return False
-                if direction == "BUY":
-                    if tp.price <= signal.entry_price:
-                        logger.warning(
-                            "invalid_buy_tp",
-                            symbol=signal.symbol,
-                            tp_level=tp.level,
-                            tp_price=tp.price,
-                            entry=signal.entry_price,
-                            direction=direction
-                        )
-                        return False
-                else:  # SELL
-                    if tp.price >= signal.entry_price:
-                        logger.warning(
-                            "invalid_sell_tp",
-                            symbol=signal.symbol,
-                            tp_level=tp.level,
-                            tp_price=tp.price,
-                            entry=signal.entry_price,
-                            direction=direction
-                        )
-                        return False
-                        
-            logger.info(
-                "price_levels_validated",
-                symbol=signal.symbol,
-                direction=direction,
-                entry=signal.entry_price,
-                sl=signal.stop_loss,
-                tps=[(tp.level, tp.price) for tp in signal.take_profits]
-            )
             return True
             
         except Exception as e:
@@ -317,7 +277,7 @@ class TradeExecutor:
             signal: The trading signal to calculate position size for
             
         Returns:
-            Optional[float]: Position size in lots, or None if calculation fails
+            Optional[float]: Position size per take profit target, None if calculation fails
         """
         try:
             if self.simulation_mode:
@@ -326,17 +286,19 @@ class TradeExecutor:
                     symbol=signal.symbol,
                     size=0.1
                 )
-                return 0.1  # 0.1 lots
+                # Divide simulation size by number of TPs
+                per_tp_size = 0.1 / len(signal.take_profits)
+                return per_tp_size
                 
-            # Use PositionManager for position size calculation
+            # Use PositionManager for total position size calculation
             try:
-                position_size = await self.position_manager.calculate_position_size(
+                total_size = await self.position_manager.calculate_position_size(
                     symbol=signal.symbol,
                     entry_price=signal.entry_price,
                     stop_loss=signal.stop_loss
                 )
                 
-                if position_size is None:
+                if total_size is None:
                     logger.error(
                         "position_size_calculation_failed",
                         symbol=signal.symbol,
@@ -345,15 +307,28 @@ class TradeExecutor:
                     )
                     return None
                     
+                # Calculate per-TP size
+                num_positions = len(signal.take_profits)  # Each position has its own TP
+                per_tp_size = total_size / num_positions
+                
+                # Get symbol info for lot step rounding
+                symbol_info = self.connection.mt5.symbol_info(signal.symbol)
+                if symbol_info:
+                    # Round to symbol's lot step
+                    lot_step = symbol_info.volume_step
+                    per_tp_size = round(per_tp_size / lot_step) * lot_step
+                
                 logger.info(
                     "position_size_calculation_success",
                     symbol=signal.symbol,
-                    size=position_size,
+                    total_size=total_size,
+                    num_positions=num_positions,
+                    per_tp_size=per_tp_size,
                     entry=signal.entry_price,
                     sl=signal.stop_loss
                 )
                 
-                return position_size
+                return per_tp_size
                 
             except Exception as e:
                 logger.error(
@@ -371,29 +346,36 @@ class TradeExecutor:
             )
             return None
             
-    async def _simulate_trade(self, signal: "TradingSignal", position_size: float) -> TradeResult:
-        """Simulate trade execution.
+    async def _simulate_trade(self, signal: "TradingSignal", per_position_size: float) -> TradeResult:
+        """Simulate trade execution with separate orders for each take profit target.
         
         Args:
             signal: The trading signal to simulate
-            position_size: Position size in lots
+            per_position_size: Position size per position (each with its own TP)
             
         Returns:
             TradeResult containing simulation results
         """
         try:
-            # Generate simulated order ID
-            order_id = int(datetime.now().timestamp())
+            # Generate simulated order IDs
+            base_timestamp = int(datetime.now().timestamp())
+            order_ids = []
             
-            # Record the simulated trade
+            # Simulate orders for each TP
+            for i, tp in enumerate(signal.take_profits):
+                order_id = base_timestamp + i
+                order_ids.append(order_id)
+            
+            # Record the simulated trades
             self._active_trades[signal.symbol] = {
-                "order_id": order_id,
+                "order_ids": order_ids,  # Store all order IDs
                 "symbol": signal.symbol,
                 "direction": signal.direction,
                 "entry_price": signal.entry_price,
                 "stop_loss": signal.stop_loss,
                 "take_profits": signal.take_profits,
-                "position_size": position_size,
+                "position_size": per_position_size * len(signal.take_profits),  # Total size
+                "per_position_size": per_position_size,  # Store individual position size
                 "timestamp": datetime.now(),
                 "simulation": True
             }
@@ -405,12 +387,14 @@ class TradeExecutor:
                 entry=signal.entry_price,
                 sl=signal.stop_loss,
                 tp=[tp.price for tp in signal.take_profits],
-                size=position_size
+                total_size=per_position_size * len(signal.take_profits),
+                per_position_size=per_position_size,
+                num_orders=len(order_ids)
             )
             
             return TradeResult(
                 success=True,
-                order_id=order_id,
+                order_id=order_ids[0],  # Return first order ID for compatibility
                 simulation=True
             )
             
@@ -426,129 +410,94 @@ class TradeExecutor:
                 simulation=True
             )
             
-    async def _execute_real_trade(self, signal: "TradingSignal", position_size: float) -> TradeResult:
-        """Execute a real trade with partial take profit management.
+    async def _execute_real_trade(self, signal: "TradingSignal", per_position_size: float) -> TradeResult:
+        """Execute a real trade with separate orders for each take profit target.
         
         Args:
             signal: The trading signal to execute
-            position_size: Position size in lots
+            per_position_size: Position size per position (each with its own TP)
             
         Returns:
             TradeResult containing execution results
         """
         try:
-            # For market orders, we don't specify an entry price
-            # MT5 will use current ask price for buy orders and bid price for sell orders
-            order_params = {
-                "symbol": signal.symbol,
-                "order_type": "MARKET",
-                "direction": signal.direction,
-                "volume": position_size,
-                "stop_loss": signal.stop_loss,
-                "take_profit": None,  # We'll manage TPs separately
-                "comment": f"Signal Entry: {signal.entry_price}"  # Store intended entry in comment
-            }
+            order_ids = []
+            successful_orders = 0
             
-            # Log order parameters
-            logger.info(
-                "placing_market_order",
-                symbol=signal.symbol,
-                direction=signal.direction,
-                intended_entry=signal.entry_price,
-                stop_loss=signal.stop_loss,
-                volume=position_size
-            )
-            
-            # Place the order
-            order_result = await self.connection.place_order(**order_params)
-            
-            # Handle dictionary response from place_order
-            if not isinstance(order_result, dict):
-                return TradeResult(
-                    success=False,
-                    error="Invalid order result format",
-                    simulation=False
-                )
-            
-            if not order_result.get("success", False):
-                return TradeResult(
-                    success=False,
-                    error=order_result.get("error", "Unknown error"),
-                    simulation=False
-                )
+            # Place separate orders for each take profit target
+            for tp in signal.take_profits:
+                order_params = {
+                    "symbol": signal.symbol,
+                    "order_type": "MARKET",
+                    "direction": str(signal.direction),
+                    "volume": per_position_size,
+                    "stop_loss": signal.stop_loss,
+                    "take_profit": tp.price,
+                    "comment": f"Signal Position: Entry {signal.entry_price} TP {tp.price}"
+                }
                 
-            order_id = order_result.get("order_id")
-            if not order_id:
-                return TradeResult(
-                    success=False,
-                    error="No order ID in response",
-                    simulation=False
-                )
-                
-            # Get the actual execution price from MT5
-            actual_price = order_result.get("price")
-            if not actual_price:
-                logger.warning(
-                    "no_execution_price",
+                # Log order parameters
+                logger.info(
+                    "placing_order",
                     symbol=signal.symbol,
-                    order_id=order_id
+                    direction=signal.direction,
+                    intended_entry=signal.entry_price,
+                    stop_loss=signal.stop_loss,
+                    take_profit=tp.price,
+                    volume=per_position_size
                 )
+                
+                # Place order
+                order_result = await self.connection.place_order(**order_params)
+                if order_result.get("success", False):
+                    order_ids.append(order_result["order_id"])
+                    successful_orders += 1
+                    
+                    actual_price = order_result.get("price")
+                    if actual_price:
+                        logger.info(
+                            "order_executed",
+                            symbol=signal.symbol,
+                            intended_entry=signal.entry_price,
+                            actual_entry=actual_price,
+                            take_profit=tp.price,
+                            order_id=order_result["order_id"]
+                        )
+                else:
+                    logger.error(
+                        "order_failed",
+                        symbol=signal.symbol,
+                        take_profit=tp.price,
+                        error=order_result.get("error", "Unknown error")
+                    )
+            
+            # Record the trades in active_trades
+            if order_ids:
+                self._active_trades[signal.symbol] = {
+                    "order_ids": order_ids,  # Store all order IDs
+                    "symbol": signal.symbol,
+                    "direction": signal.direction,
+                    "intended_entry": signal.entry_price,
+                    "stop_loss": signal.stop_loss,
+                    "take_profits": signal.take_profits,
+                    "position_size": per_position_size * len(signal.take_profits),  # Total size
+                    "timestamp": datetime.now(),
+                    "simulation": False
+                }
+            
+            # Return success if at least one order was placed
+            if successful_orders > 0:
                 return TradeResult(
-                    success=False,
-                    error="No execution price received",
+                    success=True,
+                    order_id=order_ids[0],  # Return first order ID for compatibility
                     simulation=False
                 )
-                
-            # Set up trade management with partial take profits
-            # Calculate volume fractions for each TP
-            tp_volumes = [0.25] * len(signal.take_profits)  # Equal distribution
-            take_profits = list(zip([tp.price for tp in signal.take_profits], tp_volumes))
-            
-            # Set up trade management
-            if not await self.setup_trade_management(
-                order_id=order_id,
-                take_profits=take_profits,
-                initial_sl=signal.stop_loss,
-                entry_price=actual_price
-            ):
-                logger.error(
-                    "trade_management_setup_failed",
-                    order_id=order_id,
-                    symbol=signal.symbol
+            else:
+                return TradeResult(
+                    success=False,
+                    error="Failed to place any orders",
+                    simulation=False
                 )
-                # Don't return error here as the trade is already placed
-                
-            # Record the trade with actual execution price
-            self._active_trades[signal.symbol] = {
-                "order_id": order_id,
-                "symbol": signal.symbol,
-                "direction": signal.direction,
-                "intended_entry": signal.entry_price,  # Store intended entry
-                "actual_entry": actual_price,  # Store actual execution price
-                "stop_loss": signal.stop_loss,
-                "take_profits": signal.take_profits,
-                "position_size": position_size,
-                "timestamp": datetime.now(),
-                "simulation": False
-            }
-            
-            logger.info(
-                "trade_executed",
-                symbol=signal.symbol,
-                direction=signal.direction,
-                intended_entry=signal.entry_price,
-                actual_entry=actual_price,
-                sl=signal.stop_loss,
-                tp=[tp.price for tp in signal.take_profits],
-                size=position_size,
-                order_id=order_id
-            )
-            
-            return TradeResult(
-                success=True,
-                order_id=order_id,
-                simulation=False
-            )
             
         except Exception as e:
             logger.error(
