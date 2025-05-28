@@ -379,7 +379,8 @@ class TradeExecutor:
                 "timestamp": datetime.now(),
                 "simulation": True
             }
-            
+
+
             logger.info(
                 "trade_simulated",
                 symbol=signal.symbol,
@@ -422,6 +423,7 @@ class TradeExecutor:
         """
         try:
             order_ids = []
+            executed_prices = {}  # Track actual entry prices
             successful_orders = 0
             
             # Place separate orders for each take profit target
@@ -450,18 +452,21 @@ class TradeExecutor:
                 # Place order
                 order_result = await self.connection.place_order(**order_params)
                 if order_result.get("success", False):
-                    order_ids.append(order_result["order_id"])
+                    order_id = order_result["order_id"]
+                    order_ids.append(order_id)
                     successful_orders += 1
                     
                     actual_price = order_result.get("price")
                     if actual_price:
+                        executed_prices[order_id] = actual_price  # Store actual entry price
                         logger.info(
                             "order_executed",
                             symbol=signal.symbol,
                             intended_entry=signal.entry_price,
                             actual_entry=actual_price,
                             take_profit=tp.price,
-                            order_id=order_result["order_id"]
+                            order_id=order_id,
+                            slippage=actual_price - signal.entry_price if signal.direction == SignalDirection.BUY else signal.entry_price - actual_price
                         )
                 else:
                     logger.error(
@@ -478,12 +483,14 @@ class TradeExecutor:
                     "symbol": signal.symbol,
                     "direction": signal.direction,
                     "intended_entry": signal.entry_price,
+                    "actual_entries": executed_prices,  # Store mapping of order_id to actual entry price
                     "stop_loss": signal.stop_loss,
                     "take_profits": signal.take_profits,
                     "position_size": per_position_size * len(signal.take_profits),  # Total size
                     "timestamp": datetime.now(),
                     "simulation": False
                 }
+
             
             # Return success if at least one order was placed
             if successful_orders > 0:
