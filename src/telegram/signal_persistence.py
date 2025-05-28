@@ -85,7 +85,8 @@ class SignalPersistence:
                 "take_profit": trading_signal.take_profits[0].price if trading_signal.take_profits else None,
                 "risk_reward": self._calculate_risk_reward(trading_signal),
                 "status": SignalStatus.PENDING,  # Use enum instead of string
-                "signal_metadata": self._create_metadata(trading_signal)
+                "signal_metadata": self._create_metadata(trading_signal),
+                "created_at": trading_signal.created_at
             }
             
             # Check for duplicates using signal data
