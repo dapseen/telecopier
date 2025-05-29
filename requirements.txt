@@ -73,3 +73,7 @@ pytest-cov>=4.1.0
 
 # Added from the code block
 openai>=1.12.0
+
+redis==5.0.1
+aioredis==2.0.1
+hiredis==3.2.1

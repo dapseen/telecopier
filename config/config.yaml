@@ -1,20 +1,50 @@
 # GoldMirror Trading Configuration
 
+# Application configuration
+environment: development
+log_level: INFO
+
+# Database configuration
+database:
+  url: postgresql+asyncpg://postgres:postgres@localhost:5432/telecopier
+  pool_size: 5
+  max_overflow: 10
+  echo: false
+
+# Telegram configuration
+telegram:
+  api_id: ${TELEGRAM_API_ID}
+  api_hash: ${TELEGRAM_API_HASH}
+  phone: ${TELEGRAM_PHONE}
+  session_name: telecopier
+  channels:
+    - "your_channel_1"
+    - "your_channel_2"
+
+# MT5 configuration
+mt5:
+  server: ${MT5_SERVER}
+  login: ${MT5_LOGIN}
+  password: ${MT5_PASSWORD}
+  timeout: 60000
+  enable_real_trading: false
+
 # Risk Management Parameters
 risk:
   # Position Sizing
-  risk_per_trade_pct: 0.02  # Percentage of account balance to risk per trade
-  max_position_size_pct: 0.02  # Maximum position size as percentage of account
-  max_open_positions: 2  # Maximum number of open positions allowed
+  risk_per_trade_pct: 0.02
+  max_position_size_pct: 0.02
+  max_open_positions: 10
   
   # Loss Limits
-  max_daily_loss_pct: 0.04  # Maximum daily loss as percentage of account
-  daily_loss_limit: 200  # Maximum daily loss in account currency
+  max_daily_loss_pct: 0.04
+  daily_loss_limit: 0.05  # Maximum daily loss in account currency
   min_account_balance: 100  # Minimum account balance required to trade
   
   # Trade Management
   cooldown_after_loss: 3600  # Seconds to wait after a loss
   max_slippage: 5  # Maximum allowed slippage in points
+  position_sizing: risk_based
 
 # Trading Sessions
 trading_sessions:
@@ -108,12 +138,13 @@ analytics:
     host: "localhost"
     update_interval: 60  # Seconds 
 
-mt5:
-  timezone: "UTC"
-  timeout_ms: 60000
-  retry_delay_seconds: 5
+# Redis configuration
+redis:
+  url: ${REDIS_URL:-redis://localhost:6379/0}  # Default if not set
+  pool_size: 10
+  timeout: 30
+  retry_interval: 1
   max_retries: 3
-  health_check_interval_seconds: 30
 
 # OpenAI Configuration
 openai:

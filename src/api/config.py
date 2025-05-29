@@ -138,36 +138,19 @@ class AnalyticsConfig(BaseModel):
 
 class RiskConfig(BaseModel):
     """Risk management configuration."""
-    risk_per_trade_pct: float = Field(gt=0, le=5)  # Max 5% risk per trade
-    max_position_size_pct: float = Field(gt=0, le=2)  # Max 2% position size
-    max_open_positions: int = Field(gt=0)
-    max_daily_loss_pct: float = Field(gt=0, le=5)  # Max 5% daily loss
-    daily_loss_limit: float = Field(gt=0)
-    min_account_balance: float = Field(gt=0)
-    cooldown_after_loss: int = Field(gt=0)
-    max_slippage: int = Field(gt=0)
+    risk_per_trade_pct: float = Field(default=1.0, ge=0.0, le=100.0)
+    max_open_positions: int = Field(default=10, ge=1)
+    max_daily_loss_pct: float = Field(default=5.0, ge=0.0, le=100.0)
+    max_position_size_pct: float = Field(default=5.0, ge=0.0, le=100.0)
+    position_sizing: str = "risk_based"
 
 class MT5Config(BaseModel):
     """MT5 configuration."""
-    server: Optional[str] = None  # Loaded from MT5_SERVER env var
-    timezone: str = "UTC"
-    timeout_ms: int = Field(default=60000, gt=0)
-    retry_delay_seconds: int = Field(default=5, gt=0)
-    max_retries: int = Field(default=3, gt=0)
-    health_check_interval_seconds: int = Field(default=30, gt=0)
-    login: Optional[int] = None  # Loaded from MT5_LOGIN env var
-    password: Optional[str] = None  # Loaded from MT5_PASSWORD env var
-
-    @field_validator("timezone")
-    @classmethod
-    def validate_timezone(cls, v: str) -> str:
-        """Validate timezone string."""
-        try:
-            from zoneinfo import ZoneInfo
-            ZoneInfo(v)
-        except Exception:
-            raise ValueError(f"Invalid timezone: {v}")
-        return v
+    server: str
+    login: int
+    password: str
+    timeout: int = 60000
+    enable_real_trading: bool = False
 
 class OpenAIConfig(BaseModel):
     """OpenAI configuration."""
@@ -177,6 +160,29 @@ class OpenAIConfig(BaseModel):
     timeout_seconds: int = Field(default=30, gt=0)
     retry_attempts: int = Field(default=3, gt=0)
     retry_delay_seconds: int = Field(default=1, gt=0)
+
+class DatabaseConfig(BaseModel):
+    """Database configuration."""
+    url: str
+    pool_size: int = 5
+    max_overflow: int = 10
+    echo: bool = False
+
+class TelegramConfig(BaseModel):
+    """Telegram configuration."""
+    api_id: int
+    api_hash: str
+    phone: str
+    session_name: str = "telecopier"
+    channels: List[str]
+
+class RedisConfig(BaseModel):
+    """Redis configuration."""
+    url: str = "redis://localhost:6379/0"
+    pool_size: int = 10
+    timeout: int = 30
+    retry_interval: int = 1
+    max_retries: int = 3
 
 class AppConfig(BaseModel):
     """Main application configuration."""
@@ -188,4 +194,31 @@ class AppConfig(BaseModel):
     analytics: AnalyticsConfig
     mt5: MT5Config
     risk: RiskConfig
-    openai: OpenAIConfig = Field(default_factory=OpenAIConfig) 
+    openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
+    environment: str = "development"
+    log_level: str = "INFO"
+    database: DatabaseConfig
+    telegram: TelegramConfig
+    redis: RedisConfig
+
+    @field_validator("environment")
+    @classmethod
+    def validate_environment(cls, v: str) -> str:
+        """Validate environment."""
+        valid_environments = ["development", "production"]
+        if v not in valid_environments:
+            raise ValueError(f"Invalid environment. Must be one of: {', '.join(valid_environments)}")
+        return v
+
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, v: str) -> str:
+        """Validate log level."""
+        valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+        if v.upper() not in valid_levels:
+            raise ValueError(f"Invalid log level. Must be one of: {', '.join(valid_levels)}")
+        return v.upper()
+
+    class Config:
+        """Pydantic config."""
+        arbitrary_types_allowed = True 

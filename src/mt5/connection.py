@@ -457,6 +457,74 @@ class MT5Connection:
             )
             return None
 
+    async def get_positions(
+        self,
+        ticket: Optional[int] = None
+    ) -> Optional[List[Dict]]:
+        """Get open positions with optional filtering.
+        
+        Args:
+            ticket: Optional specific position ticket number
+            
+        Returns:
+            List of position dictionaries if successful, None if error
+        """
+        if not self._connected:
+            logger.warning("getting_positions_not_connected")
+            return None
+            
+        try:
+            # Get positions based on provided filters
+            if ticket is not None:
+                positions = self.mt5.positions_get(ticket=ticket)
+                
+                if positions is None:
+                    error = self.mt5.last_error()
+                    logger.error(
+                        "positions_get_failed",
+                        error_code=error[0],
+                        error_message=error[1]
+                    )
+                    return None
+                
+            # Convert positions to dictionaries
+            positions_list = []
+            for position in positions:
+                position_dict = {
+                    "ticket": position.ticket,
+                    "time": position.time,
+                    "type": position.type,
+                    "magic": position.magic,
+                    "identifier": position.identifier,
+                    "reason": position.reason,
+                    "volume": position.volume,
+                    "price_open": position.price_open,
+                    "sl": position.sl,
+                    "tp": position.tp,
+                    "price_current": position.price_current,
+                    "swap": position.swap,
+                    "profit": position.profit,
+                    "symbol": position.symbol,
+                    "comment": position.comment
+                }
+                positions_list.append(position_dict)
+                
+            logger.info(
+                "positions_retrieved",
+                count=len(positions_list),
+                ticket=ticket
+            )
+            
+            return positions_list
+            
+        except Exception as e:
+            logger.error(
+                "get_positions_error",
+                error=str(e),
+                ticket=ticket
+            )
+            return None
+
     async def clear_cache(self) -> None:
         """Clear cached data and refresh from MT5."""
         async with self._lock:

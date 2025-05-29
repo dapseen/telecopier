@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 from .connection import MT5Connection
 from .position_manager import RiskConfig, PositionManager
+from .redis_manager import RedisTradeManager
 from src.common.types import SignalDirection
 
 logger = structlog.get_logger(__name__)
@@ -50,6 +51,7 @@ class TradeExecutor:
         self,
         connection: MT5Connection,
         risk_config: RiskConfig,
+        redis_manager: RedisTradeManager,
         simulation_mode: bool = False
     ):
         """Initialize trade executor.
@@ -57,12 +59,13 @@ class TradeExecutor:
         Args:
             connection: MT5 connection instance
             risk_config: Risk management configuration
+            redis_manager: Redis trade manager instance
             simulation_mode: Whether to run in simulation mode
         """
         self.connection = connection
         self.risk_config = risk_config
+        self.redis_manager = redis_manager
         self.simulation_mode = simulation_mode or connection.is_simulation_mode
-        self._active_trades: Dict[str, Dict[str, Any]] = {}
         self._lock = asyncio.Lock()
         self.position_manager = PositionManager(connection, risk_config)
         
@@ -79,7 +82,7 @@ class TradeExecutor:
         try:
             async with self._lock:
                 # Validate signal
-                validation_result = self._validate_signal(signal)
+                validation_result = await self._validate_signal(signal)
                 if not validation_result:
                     return TradeResult(
                         success=False,
@@ -150,7 +153,7 @@ class TradeExecutor:
                 simulation=self.simulation_mode
             )
             
-    def _validate_signal(self, signal: "TradingSignal") -> bool:
+    async def _validate_signal(self, signal: "TradingSignal") -> bool:
         """Validate signal against current market conditions.
         
         Args:
@@ -171,8 +174,15 @@ class TradeExecutor:
                     )
                     return False
                     
-            # Check if we already have an open position
-            if signal.symbol in self._active_trades:
+            # Check if we already have an open position for this symbol
+            active_trades = await self.redis_manager.check_active_trades()
+            symbol_has_active_trade = any(
+                trade["symbol"] == signal.symbol and 
+                any(order["status"] == "ACTIVE" for order in trade["orders"])
+                for trade in active_trades
+            )
+            
+            if symbol_has_active_trade:
                 logger.warning(
                     "position_already_open",
                     symbol=signal.symbol
@@ -360,37 +370,36 @@ class TradeExecutor:
             # Generate simulated order IDs
             base_timestamp = int(datetime.now().timestamp())
             order_ids = []
+            executed_prices = {}
             
             # Simulate orders for each TP
             for i, tp in enumerate(signal.take_profits):
                 order_id = base_timestamp + i
                 order_ids.append(order_id)
+                # In simulation, use intended entry as actual entry
+                executed_prices[order_id] = signal.entry_price
             
-            # Record the simulated trades
-            self._active_trades[signal.symbol] = {
-                "order_ids": order_ids,  # Store all order IDs
+            # Record the simulated trade in Redis
+            trade_data = {
+                "order_ids": order_ids,
                 "symbol": signal.symbol,
                 "direction": signal.direction,
-                "entry_price": signal.entry_price,
+                "intended_entry": signal.entry_price,
+                "actual_entries": executed_prices,
                 "stop_loss": signal.stop_loss,
                 "take_profits": signal.take_profits,
-                "position_size": per_position_size * len(signal.take_profits),  # Total size
-                "per_position_size": per_position_size,  # Store individual position size
-                "timestamp": datetime.now(),
+                "position_size": per_position_size * len(signal.take_profits),
+                "timestamp": datetime.now(timezone.utc),
                 "simulation": True
             }
-
-
+            
+            # Store only in Redis
+            await self.redis_manager.store_trade(signal.symbol, trade_data)
             logger.info(
-                "trade_simulated",
+                "simulated_trade_stored",
                 symbol=signal.symbol,
-                direction=signal.direction,
-                entry=signal.entry_price,
-                sl=signal.stop_loss,
-                tp=[tp.price for tp in signal.take_profits],
-                total_size=per_position_size * len(signal.take_profits),
-                per_position_size=per_position_size,
-                num_orders=len(order_ids)
+                order_ids=order_ids,
+                storage="redis"
             )
             
             return TradeResult(
@@ -476,21 +485,29 @@ class TradeExecutor:
                         error=order_result.get("error", "Unknown error")
                     )
             
-            # Record the trades in active_trades
+            # Record the trades if any orders were successful
             if order_ids:
-                self._active_trades[signal.symbol] = {
-                    "order_ids": order_ids,  # Store all order IDs
+                trade_data = {
+                    "order_ids": order_ids,
                     "symbol": signal.symbol,
                     "direction": signal.direction,
                     "intended_entry": signal.entry_price,
-                    "actual_entries": executed_prices,  # Store mapping of order_id to actual entry price
+                    "actual_entries": executed_prices,
                     "stop_loss": signal.stop_loss,
                     "take_profits": signal.take_profits,
-                    "position_size": per_position_size * len(signal.take_profits),  # Total size
-                    "timestamp": datetime.now(),
+                    "position_size": per_position_size * len(signal.take_profits),
+                    "timestamp": datetime.now(timezone.utc),
                     "simulation": False
                 }
-
+                
+                # Store only in Redis
+                await self.redis_manager.store_trade(signal.symbol, trade_data)
+                logger.info(
+                    "trade_stored",
+                    symbol=signal.symbol,
+                    order_ids=order_ids,
+                    storage="redis"
+                )
             
             # Return success if at least one order was placed
             if successful_orders > 0:
